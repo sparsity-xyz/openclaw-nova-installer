@@ -1,0 +1,29 @@
+version: v1
+name: "openclaw-nova"
+target: "openclaw-nova:latest"
+
+sources:
+  app: "openclaw-nova-app:latest"
+
+api:
+  listen_port: 18000
+
+ingress:
+  - listen_port: 18789
+
+egress:
+  allow:
+    - "**"
+    - "0.0.0.0/0"
+    - "::/0"
+
+kms_integration:
+  enabled: false
+
+storage:
+  s3:
+    enabled: false
+
+defaults:
+  cpu_count: 2
+  memory_mb: 4096

@@ -1,0 +1,9 @@
+.git
+.gitignore
+node_modules
+dist
+coverage
+*.log
+state/
+workspace/
+.env
