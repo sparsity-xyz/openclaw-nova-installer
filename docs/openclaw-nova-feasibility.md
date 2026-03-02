@@ -1,83 +1,83 @@
-# OpenClaw 在 Nova Platform 的可行性调研
+# OpenClaw on Nova Platform Feasibility Study
 
-## 1) 是否能完全自动化安装并提供 Web UI
+## 1) Can it be fully automated and provide a Web UI?
 
-结论：**可以做到高自动化（80~90%）**。
+Conclusion: **High automation (80~90%) is achievable**.
 
-- OpenClaw 官方支持 Docker 化运行，且 Control UI 默认由 Gateway 同端口提供。
-- Nova app 形态与 OpenClaw 单进程 Gateway 很匹配：只需暴露一个 ingress 端口。
-- 仍保留少量人工步骤：
-  - 设置模型供应商密钥（如 OpenAI/Anthropic）
-  - 生产环境下替换网关 token
-  - 可选渠道（Telegram/Discord 等）凭据配置
+- OpenClaw officially supports Dockerized runs, and the Control UI is provided by the Gateway on the same port by default.
+- The Nova app form factor matches the OpenClaw single-process Gateway well: only revealing one ingress port is needed.
+- A few manual steps remain:
+  - Setting up the model provider keys (like OpenAI/Anthropic)
+  - Replacing the gateway token for production
+  - Optional channel credentials configuration (Telegram/Discord, etc.)
 
-## 2) OpenClaw 技术栈是否能在 Nova 里运行
+## 2) Can the OpenClaw tech stack run within Nova?
 
-结论：**核心可运行，部分模块需关闭**。
+Conclusion: **The core can run, but some modules need to be disabled**.
 
-可运行部分：
-- Node.js 22 + OpenClaw Gateway 主进程
-- Control UI / WebChat（经 Gateway 同端口）
-- 基础 agent/runtime 与工具编排
+Runnable parts:
+- Node.js 22 + OpenClaw Gateway main process
+- Control UI / WebChat (multiplexed via Gateway on the same port)
+- Basic agent/runtime and tool orchestration
 
-需要关闭或限制：
-- 依赖宿主桌面能力的模块（如 macOS/iOS/Android node、本地 GUI）
-- 默认关闭浏览器控制与 Canvas host（减少依赖和资源占用）
-- 不建议在 enclave 内使用 systemd/daemon 安装路径，改前台进程运行
+Needs to be disabled or restricted:
+- Modules dependent on host desktop capabilities (e.g., macOS/iOS/Android node, local GUI)
+- Browser control and Canvas host should be disabled by default (to reduce dependencies and resource consumption)
+- Running via systemd/daemon installation path is not recommended inside the enclave, switch to foreground execution.
 
-## 3) 存储与内存建议
+## 3) Storage and Memory Recommendations
 
-### 内存（运行流畅）
+### Memory (for smooth running)
 
-建议分层：
-- 最小可用：`2048 MB`
-- 推荐：`4096 MB`
-- 重负载（多会话/多插件）：`6144 MB`+
+Suggested tiers:
+- Minimal usable: `2048 MB`
+- Recommended: `4096 MB`
+- Heavy load (multi-session/multi-plugin): `6144 MB`+
 
-依据：
-- OpenClaw Docker 文档对构建阶段提示至少 2GB（避免 Node/pnpm OOM）。
-- 运行时若启用较多功能（频道、工具、检索）会明显增加堆内存需求。
+Reasoning:
+- OpenClaw Docker docs suggest at least 2GB during the build phase (to avoid Node/pnpm OOM).
+- Enabling multiple features (channels, tools, retrieval) will significantly increase heap memory requirements during runtime.
 
-### 存储
+### Storage
 
-建议分层：
-- 镜像与基础运行：`8~12 GB`
-- 含会话/日志/缓存的稳定运行：`20 GB`+
+Suggested tiers:
+- Images and base runtime: `8~12 GB`
+- Stable running with sessions/logs/cache: `20 GB`+
 
-说明：
-- OpenClaw 默认将状态写入 `$OPENCLAW_STATE_DIR`（默认 `~/.openclaw`）。
-- 生产环境需为日志、会话、凭据与插件缓存预留空间。
+Explanation:
+- OpenClaw writes state to `$OPENCLAW_STATE_DIR` by default (usually `~/.openclaw`).
+- Production environments require reserved space for logs, sessions, credentials, and plugin caching.
 
-## 4) 将本地磁盘改写到 S3 的难度
+## 4) Difficulty of changing local disk storage to S3
 
-结论：**中高难度（约 7/10）**。
+Conclusion: **Medium-High Difficulty (about 7/10)**.
 
-原因：
-- OpenClaw 代码大量使用本地文件语义（目录结构、原子写、锁、会话与缓存文件）。
-- S3 是对象存储，不具备 POSIX 目录与原子 rename 语义。
-- 直接“把文件系统替换为 S3”会影响一致性、时延和并发行为。
+Reasoning:
+- OpenClaw codebase heavily relies on local file semantics (directory structures, atomic writes, locking, session and cache files).
+- S3 is an object store and does not provide POSIX directories or atomic rename semantics.
+- Directly "replacing the filesystem with S3" would affect consistency, latency, and concurrency behavior.
 
-可行路线：
-- 短期：本地临时盘 + 周期性快照/备份到 S3（低改造）
-- 中期：状态分层（热数据本地，冷数据归档 S3）
-- 长期：重构状态后端（抽象 storage adapter）
+Feasible Roadmaps:
+- Short-term: Ephemeral local disk + periodic snapshots/backups to S3 (low modification).
+- Medium-term: State tiering (hot data stored locally, cold data archived to S3).
+- Long-term: Refactor the state backend (abstracting a storage adapter).
 
-## 5) 哪些模块可能无法在 AWS Nitro Enclave 内运行
+## 5) Which modules might fail to run in AWS Nitro Enclaves?
 
-高风险/建议舍弃：
-- 依赖宿主 OS GUI 或移动设备桥接的模块（macOS/iOS/Android node）
-- 需要额外特权、系统服务管理器（systemd/launchd）的守护化流程
-- 依赖本地浏览器/图形栈的能力（browser control、部分 canvas 场景）
+High Risk / Suggested to drop:
+- Modules relying on host OS GUI or mobile device bridging (macOS/iOS/Android node)
+- Daemonized processes requiring extra privileges or system service managers (systemd/launchd)
+- Capabilities depending on the local browser/graphics stack (browser control, certain canvas scenarios)
 
-中风险：
-- 某些第三方渠道连接器（依赖外部二进制、长期连接与复杂凭据刷新）
+Medium Risk:
+- Certain third-party channel connectors (depending on external binaries, long-lived connections, and complex credential refreshes)
 
-低风险：
-- Gateway 核心 + Web UI + 基础聊天/会话能力
+Low Risk:
+- Gateway Core + Web UI + basic chat/session capabilities
 
 ---
 
-本调研结合了：
-- `enclaver/docs` 对 enclaver 运行模型（ingress/egress、vsock、单应用进程）的描述
-- `app-template` 对 nova-app 的构建与部署模式
-- OpenClaw 官方 Docker / Gateway / Web 文档与仓库配置惯例
+This research combines:
+- `enclaver/docs` description of the enclaver runtime model (ingress/egress, vsock, single-app process)
+- `app-template` build and deployment patterns for nova-app
+- OpenClaw official Docker / Gateway / Web documentation and repository configuration conventions

@@ -1,8 +1,8 @@
 # OpenClaw Installer for Nova Platform
 
-这个目录提供一个可执行的 installer，用于生成可在 Nova Platform 上部署的 OpenClaw 应用包（含 Web UI）。
+This directory provides an executable installer to generate an OpenClaw application package (with Web UI) that can be deployed on the Nova Platform.
 
-## 快速开始
+## Quick Start
 
 ```bash
 cd openclaw-installer
@@ -10,7 +10,7 @@ chmod +x scripts/install_openclaw_nova_app.sh
 ./scripts/install_openclaw_nova_app.sh
 ```
 
-默认会生成：
+By default, it will generate:
 
 - `generated/openclaw-nova-app/Dockerfile`
 - `generated/openclaw-nova-app/enclaver.yaml`
@@ -20,7 +20,7 @@ chmod +x scripts/install_openclaw_nova_app.sh
 - `generated/openclaw-nova-app/.gitignore`
 - `generated/openclaw-nova-app/NOVA_SUBMISSION_CHECKLIST.md`
 
-## 自定义资源与端口
+## Custom Resources and Ports
 
 ```bash
 ./scripts/install_openclaw_nova_app.sh \
@@ -33,7 +33,7 @@ chmod +x scripts/install_openclaw_nova_app.sh
   --memory-mb 4096
 ```
 
-## 生成后如何构建
+## How to Build After Generation
 
 ```bash
 cd generated/openclaw-nova-app
@@ -41,10 +41,9 @@ make build-docker
 make build-enclave
 ```
 
-`generated/openclaw-nova-app` 可以直接作为独立 Git 仓库根目录提交到 Nova Platform。
+`generated/openclaw-nova-app` can be submitted to the Nova Platform directly as the root directory of a standalone Git repository.
 
-## 设计与调研文档
+## Design and Research Documents
 
 - `docs/openclaw-nova-feasibility.md`
 - `docs/openclaw-nova-installer-design.md`
-# openclaw-nova-installer

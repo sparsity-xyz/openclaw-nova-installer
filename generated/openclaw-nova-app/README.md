@@ -24,10 +24,10 @@ Use token:
 - If env `OPENCLAW_GATEWAY_TOKEN` was set, use that.
 - Otherwise token is printed in container logs.
 
-## Nova Platform 提交步骤
+## Nova Platform Submission Steps
 
-1. 将当前目录作为独立 Git 仓库提交（包含 `Dockerfile`、`enclaver.yaml`、`Makefile`）。
-2. 在 Nova Platform 中创建 App，填写该 Git 仓库地址。
-3. 创建 Build（分支建议 `main`），平台将执行构建并封装 enclave。
-4. 创建 Deployment 并发布。
-5. 部署完成后访问应用 URL（对应 `ingress.listen_port=18789`）。
+1. Submit the current directory as a standalone Git repository (including `Dockerfile`, `enclaver.yaml`, `Makefile`).
+2. Create an App in the Nova Platform and provide the Git repository address.
+3. Create a Build (the `main` branch is recommended), and the platform will execute the build and package the enclave.
+4. Create a Deployment and publish it.
+5. After the deployment is complete, access the application URL (corresponding to `ingress.listen_port=18789`).
