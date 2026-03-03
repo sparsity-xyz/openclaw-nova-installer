@@ -27,3 +27,4 @@ storage:
 defaults:
   cpu_count: __CPU_COUNT__
   memory_mb: __MEMORY_MB__
+
