@@ -1,4 +1,4 @@
-.PHONY: build-docker build-enclave run-local
+.PHONY: build-docker build-enclave prepare-local-data run-local
 .RECIPEPREFIX := >
 
 build-docker:
@@ -7,5 +7,8 @@ build-docker:
 build-enclave:
 > enclaver build
 
-run-local:
-> docker run --rm -p 18789:18789 -e OPENCLAW_GATEWAY_TOKEN=dev-token openclaw-nova-app:latest
+prepare-local-data:
+> mkdir -p ./openclaw-data
+
+run-local: prepare-local-data
+> docker run --rm -p 18789:18789 -e OPENCLAW_GATEWAY_TOKEN=dev-token -v "$(CURDIR)/openclaw-data:/mnt/openclaw" openclaw-nova-app:latest

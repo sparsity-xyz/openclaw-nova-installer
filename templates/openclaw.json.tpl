@@ -13,7 +13,7 @@
   },
   "agents": {
     "defaults": {
-      "workspace": "/opt/openclaw/workspace"
+      "workspace": "__MOUNT_PATH__/workspace"
     }
   }
 }

@@ -9,9 +9,9 @@ Provide a script to automatically generate an OpenClaw application package that 
 The installer generates a standard nova-app directory, containing:
 
 - `Dockerfile`: Based on `ghcr.io/openclaw/openclaw:latest`
-- `entrypoint.sh`: Injects a token and starts the gateway in the foreground
-- `openclaw.json`: Minimal configuration (`gateway.mode/local` + `controlUi`)
-- `enclaver.yaml`: Nova enclaver manifest (ingress/egress/resources)
+- `entrypoint.sh`: Injects a token, bootstraps `/mnt/openclaw`, and starts the gateway in the foreground
+- `openclaw.json`: Minimal configuration (`gateway.mode/local` + `controlUi`) with workspace rooted in `/mnt/openclaw`
+- `enclaver.yaml`: Nova enclaver manifest (ingress/egress/resources + `storage.mounts[]`)
 - `Makefile`: `build-docker`, `build-enclave`, `run-local`
 - `.dockerignore`
 - `.gitignore`
@@ -29,12 +29,22 @@ The installer generates a standard nova-app directory, containing:
      - `OPENCLAW_SKIP_BROWSER_CONTROL_SERVER=1`
      - `OPENCLAW_SKIP_CANVAS_HOST=1`
    - Avoids systemd/daemon, runs directly as a foreground process.
+   - Uses the host-backed mount path `/mnt/openclaw` for state, workspace, and runtime config.
 
-3. **Secure Defaults**
+3. **Host-Backed Mount Integration**
+   - `enclaver.yaml` declares:
+     - `storage.mounts[0].name=openclaw`
+     - `storage.mounts[0].mount_path=/mnt/openclaw`
+     - `storage.mounts[0].required=true`
+     - `storage.mounts[0].size_mb=10240` by default
+   - The generated image bundles a default config at `/etc/openclaw/default-openclaw.json`.
+   - On first boot, `entrypoint.sh` copies that config to `/mnt/openclaw/openclaw.json` if it does not already exist.
+
+4. **Secure Defaults**
    - Automatically generates a 32-byte hex token on startup if `OPENCLAW_GATEWAY_TOKEN` is not provided.
    - Forces UI/WS access in token mode.
 
-4. **Resource Defaults**
+5. **Resource Defaults**
    - `cpu_count=2`
    - `memory_mb=4096`
    - Can be overridden via installer parameters.
@@ -50,13 +60,17 @@ The installer generates a standard nova-app directory, containing:
 - `--gateway-port`
 - `--cpu-count`
 - `--memory-mb`
+- `--mount-name`
+- `--mount-path`
+- `--mount-size-mb`
 
 ## Deployment Flow (Target State)
 
 1. Run the installer in `openclaw-installer` to generate the app package.
 2. Use the Nova build process to execute `make build-docker` and `make build-enclave`.
-3. Publish and deploy on the Nova platform.
-4. Users open the Control UI via the app URL and log in using the token.
+3. During deployment, Nova runtime binds the host-backed directory with `enclaver run --mount openclaw=<host_state_dir>`.
+4. OpenClaw starts with `/mnt/openclaw` as its writable data root.
+5. Users open the Control UI via the app URL and log in using the token.
 
 ## Future Enhancements Proposals
 

@@ -21,10 +21,12 @@ kms_integration:
   enabled: false
 
 storage:
-  s3:
-    enabled: false
+  mounts:
+    - name: "__MOUNT_NAME__"
+      mount_path: "__MOUNT_PATH__"
+      required: true
+      size_mb: __MOUNT_SIZE_MB__
 
 defaults:
   cpu_count: __CPU_COUNT__
   memory_mb: __MEMORY_MB__
-

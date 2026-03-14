@@ -58,7 +58,7 @@ Reasoning:
 - Directly "replacing the filesystem with S3" would affect consistency, latency, and concurrency behavior.
 
 Feasible Roadmaps:
-- Short-term: Ephemeral local disk + periodic snapshots/backups to S3 (low modification).
+- Short-term: Use Enclaver/Nova host-backed directory mounts so OpenClaw keeps normal file semantics under `/mnt/openclaw`, with optional snapshots/backups to S3.
 - Medium-term: State tiering (hot data stored locally, cold data archived to S3).
 - Long-term: Refactor the state backend (abstracting a storage adapter).
 

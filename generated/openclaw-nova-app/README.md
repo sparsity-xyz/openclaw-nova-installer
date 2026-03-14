@@ -24,6 +24,13 @@ Use token:
 - If env `OPENCLAW_GATEWAY_TOKEN` was set, use that.
 - Otherwise token is printed in container logs.
 
+## Host-backed mount layout
+
+- OpenClaw state, workspace, and runtime config live under `/mnt/openclaw`
+- On first boot the entrypoint copies the bundled default config to `/mnt/openclaw/openclaw.json`
+- The generated local smoke test simulates Nova's host-backed mount with `./openclaw-data -> /mnt/openclaw`
+- In Nova runtime, Enclaver/Nova will bind the host-backed directory through `storage.mounts[]` + `enclaver run --mount openclaw=...`
+
 ## Nova Platform Submission Steps
 
 1. Submit the current directory as a standalone Git repository (including `Dockerfile`, `enclaver.yaml`, `Makefile`).

@@ -21,8 +21,11 @@ kms_integration:
   enabled: false
 
 storage:
-  s3:
-    enabled: false
+  mounts:
+    - name: "openclaw"
+      mount_path: "/mnt/openclaw"
+      required: true
+      size_mb: 10240
 
 defaults:
   cpu_count: 2

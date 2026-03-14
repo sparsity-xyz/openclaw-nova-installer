@@ -1,5 +1,3 @@
-state/
-workspace/
+openclaw-data/
 .env
 *.log
-
