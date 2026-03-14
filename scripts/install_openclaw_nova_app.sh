@@ -9,8 +9,9 @@ APP_NAME="openclaw-nova"
 APP_IMAGE="openclaw-nova-app:latest"
 TARGET_IMAGE="openclaw-nova:latest"
 GATEWAY_PORT="18789"
+GATEWAY_INTERNAL_PORT=""
 CPU_COUNT="2"
-MEMORY_MB="4096"
+MEMORY_MB="12288"
 MOUNT_NAME="openclaw"
 MOUNT_PATH="/mnt/openclaw"
 MOUNT_SIZE_MB="10240"
@@ -26,8 +27,11 @@ Options:
   --app-image <image>    Docker image for sources.app (default: openclaw-nova-app:latest)
   --target-image <image> Release image tag in enclaver.yaml (default: openclaw-nova:latest)
   --gateway-port <port>  OpenClaw gateway/control-ui port (default: 18789)
+  --gateway-internal-port <port>
+                         Internal loopback port for the OpenClaw gateway process
+                         (default: gateway-port+1, or gateway-port-1 if 65535)
   --cpu-count <n>        enclaver defaults.cpu_count (default: 2)
-  --memory-mb <mb>       enclaver defaults.memory_mb (default: 4096)
+  --memory-mb <mb>       enclaver defaults.memory_mb (default: 12288)
   --mount-name <name>    Host-backed mount name (default: openclaw)
   --mount-path <path>    Path mounted inside enclave (default: /mnt/openclaw)
   --mount-size-mb <mb>   Host-backed mount size in MiB (default: 10240)
@@ -55,6 +59,10 @@ while [[ $# -gt 0 ]]; do
       ;;
     --gateway-port)
       GATEWAY_PORT="$2"
+      shift 2
+      ;;
+    --gateway-internal-port)
+      GATEWAY_INTERNAL_PORT="$2"
       shift 2
       ;;
     --cpu-count)
@@ -109,6 +117,24 @@ if ! is_positive_int "$GATEWAY_PORT" || [[ "$GATEWAY_PORT" -gt 65535 ]]; then
   exit 1
 fi
 
+if [[ -z "$GATEWAY_INTERNAL_PORT" ]]; then
+  if [[ "$GATEWAY_PORT" -lt 65535 ]]; then
+    GATEWAY_INTERNAL_PORT="$((GATEWAY_PORT + 1))"
+  else
+    GATEWAY_INTERNAL_PORT="$((GATEWAY_PORT - 1))"
+  fi
+fi
+
+if ! is_positive_int "$GATEWAY_INTERNAL_PORT" || [[ "$GATEWAY_INTERNAL_PORT" -gt 65535 ]]; then
+  echo "Invalid --gateway-internal-port: $GATEWAY_INTERNAL_PORT" >&2
+  exit 1
+fi
+
+if [[ "$GATEWAY_INTERNAL_PORT" -eq "$GATEWAY_PORT" ]]; then
+  echo "Invalid gateway port layout: public and internal ports must differ" >&2
+  exit 1
+fi
+
 if ! is_positive_int "$CPU_COUNT"; then
   echo "Invalid --cpu-count: $CPU_COUNT" >&2
   exit 1
@@ -142,6 +168,7 @@ render_template() {
 
   sed \
     -e "s#__GATEWAY_PORT__#${GATEWAY_PORT}#g" \
+    -e "s#__GATEWAY_INTERNAL_PORT__#${GATEWAY_INTERNAL_PORT}#g" \
     -e "s#__CPU_COUNT__#${CPU_COUNT}#g" \
     -e "s#__MEMORY_MB__#${MEMORY_MB}#g" \
     -e "s#__APP_NAME__#${APP_NAME}#g" \
@@ -158,6 +185,7 @@ render_inline() {
 
   sed \
     -e "s#__GATEWAY_PORT__#${GATEWAY_PORT}#g" \
+    -e "s#__GATEWAY_INTERNAL_PORT__#${GATEWAY_INTERNAL_PORT}#g" \
     -e "s#__CPU_COUNT__#${CPU_COUNT}#g" \
     -e "s#__MEMORY_MB__#${MEMORY_MB}#g" \
     -e "s#__APP_NAME__#${APP_NAME}#g" \
@@ -171,6 +199,7 @@ render_inline() {
 
 render_template "${TEMPLATE_DIR}/Dockerfile.tpl" "${OUTPUT_DIR}/Dockerfile"
 render_template "${TEMPLATE_DIR}/entrypoint.sh.tpl" "${OUTPUT_DIR}/entrypoint.sh"
+render_template "${TEMPLATE_DIR}/tcp_proxy.mjs.tpl" "${OUTPUT_DIR}/tcp_proxy.mjs"
 render_template "${TEMPLATE_DIR}/openclaw.json.tpl" "${OUTPUT_DIR}/openclaw.json"
 render_template "${TEMPLATE_DIR}/enclaver.yaml.tpl" "${OUTPUT_DIR}/enclaver.yaml"
 
@@ -241,8 +270,11 @@ Use token:
 
 - OpenClaw state, workspace, and runtime config live under `__MOUNT_PATH__`
 - On first boot the entrypoint copies the bundled default config to `__MOUNT_PATH__/openclaw.json`
+- The generated enclave manifest defaults to `memory_mb=__MEMORY_MB__`
+- A lightweight HTTP/WS reverse proxy listens on the public port `__GATEWAY_PORT__` and forwards to the loopback-only OpenClaw gateway on `127.0.0.1:__GATEWAY_INTERNAL_PORT__`
 - The generated local smoke test simulates Nova's host-backed mount with `./openclaw-data -> __MOUNT_PATH__`
 - In Nova runtime, Enclaver/Nova will bind the host-backed directory through `storage.mounts[]` + `enclaver run --mount __MOUNT_NAME__=...`
+- In Enclaver hostfs, the host state directory persists `.enclaver-hostfs/disk.img`; while the enclave is running, the mounted filesystem appears under `.enclaver-hostfs/mnt-*/data`
 
 ## Nova Platform Submission Steps
 

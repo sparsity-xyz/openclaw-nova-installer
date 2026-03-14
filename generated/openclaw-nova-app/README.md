@@ -28,8 +28,11 @@ Use token:
 
 - OpenClaw state, workspace, and runtime config live under `/mnt/openclaw`
 - On first boot the entrypoint copies the bundled default config to `/mnt/openclaw/openclaw.json`
+- The generated enclave manifest defaults to `memory_mb=12288`
+- A lightweight HTTP/WS reverse proxy listens on the public port `18789` and forwards to the loopback-only OpenClaw gateway on `127.0.0.1:18790`
 - The generated local smoke test simulates Nova's host-backed mount with `./openclaw-data -> /mnt/openclaw`
 - In Nova runtime, Enclaver/Nova will bind the host-backed directory through `storage.mounts[]` + `enclaver run --mount openclaw=...`
+- In Enclaver hostfs, the host state directory persists `.enclaver-hostfs/disk.img`; while the enclave is running, the mounted filesystem appears under `.enclaver-hostfs/mnt-*/data`
 
 ## Nova Platform Submission Steps
 

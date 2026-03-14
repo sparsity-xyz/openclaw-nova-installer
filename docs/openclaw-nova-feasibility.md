@@ -30,13 +30,14 @@ Needs to be disabled or restricted:
 ### Memory (for smooth running)
 
 Suggested tiers:
-- Minimal usable: `2048 MB`
-- Recommended: `4096 MB`
-- Heavy load (multi-session/multi-plugin): `6144 MB`+
+- Measured Nitro minimum for the current `ghcr.io/openclaw/openclaw:latest` EIF: `10640 MiB`
+- Installer default / recommended baseline: `12288 MiB`
+- Heavy load (multi-session/multi-plugin): `14336 MiB`+
 
 Reasoning:
-- OpenClaw Docker docs suggest at least 2GB during the build phase (to avoid Node/pnpm OOM).
-- Enabling multiple features (channels, tools, retrieval) will significantly increase heap memory requirements during runtime.
+- On `app-node` testing dated 2026-03-14, `nitro-cli run-enclave` rejected `4096 MiB` with `E26` and reported that at least `10640 MiB` was required for the generated EIF.
+- Enabling multiple features (channels, tools, retrieval) will further increase runtime heap pressure beyond that Nitro minimum.
+- EIF packaging is a separate host-memory concern: smaller Nitro nodes may need a lower `allocator.yaml` reservation during `enclaver build` so the host can finish `build-eif`.
 
 ### Storage
 
