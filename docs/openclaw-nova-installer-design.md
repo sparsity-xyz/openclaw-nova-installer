@@ -9,7 +9,7 @@ Provide a script to automatically generate an OpenClaw application package that 
 The installer generates a standard nova-app directory, containing:
 
 - `Dockerfile`: Based on `ghcr.io/openclaw/openclaw:latest`
-- `entrypoint.sh`: Injects a token, bootstraps `/mnt/openclaw`, and starts the gateway in the foreground
+- `entrypoint.sh`: Injects a token, bootstraps `/mnt/openclaw`, starts the proxy in the background, and keeps `openclaw gateway run` in the foreground
 - `tcp_proxy.mjs`: Exposes the public ingress port while proxying HTTP and WebSocket traffic to the loopback-only gateway process
 - `openclaw.json`: Minimal configuration (`gateway.mode/local` + `controlUi`) with workspace rooted in `/mnt/openclaw`
 - `enclaver.yaml`: Nova enclaver manifest (ingress/egress/resources + `storage.mounts[]`)
@@ -29,7 +29,7 @@ The installer generates a standard nova-app directory, containing:
      - `OPENCLAW_SKIP_CHANNELS=1`
      - `OPENCLAW_SKIP_BROWSER_CONTROL_SERVER=1`
      - `OPENCLAW_SKIP_CANVAS_HOST=1`
-   - Avoids systemd/daemon, runs directly as a foreground process.
+   - Avoids systemd/daemon, runs the gateway directly in the foreground so Nitro/Enclaver sees a stable main process.
    - Uses the host-backed mount path `/mnt/openclaw` for state, workspace, and runtime config.
    - Keeps the real OpenClaw gateway on loopback so the process sees a local client path even when Nova/Enclaver forwards traffic in from outside.
 
