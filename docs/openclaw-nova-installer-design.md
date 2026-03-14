@@ -2,87 +2,144 @@
 
 ## Objective
 
-Provide a script to automatically generate an OpenClaw application package that can be deployed to the Nova Platform, with the Web UI enabled by default.
+Generate a Nova-ready application package that runs an image-bundled OpenClaw CLI while keeping all mutable state in a host-backed mount, and expose a safer hosted control plane for first-run setup and later management.
 
-## Generated Content
+## High-Level Architecture
 
-The installer generates a standard nova-app directory, containing:
+The generated app contains two logical layers:
 
-- `Dockerfile`: Based on `ghcr.io/openclaw/openclaw:latest`
-- `entrypoint.sh`: Injects a token, bootstraps `/mnt/openclaw`, starts the proxy in the background, and keeps `openclaw gateway run` in the foreground
-- `tcp_proxy.mjs`: Exposes the public ingress port while proxying HTTP and WebSocket traffic to the loopback-only gateway process
-- `openclaw.json`: Minimal configuration (`gateway.mode/local` + `controlUi`) with workspace rooted in `/mnt/openclaw`
-- `enclaver.yaml`: Nova enclaver manifest (ingress/egress/resources + `storage.mounts[]`)
-- `Makefile`: `build-docker`, `build-enclave`, `run-local`
-- `.dockerignore`
-- `.gitignore`
-- `NOVA_SUBMISSION_CHECKLIST.md`
+1. `openclaw-manager`
+   - Public HTTP service on port `8000`
+   - Handles registration, login, initialization, config updates, and reverse proxying
 
-## Key Design Points
+2. OpenClaw gateway
+   - Installed with `install-cli.sh --prefix /opt/openclaw-cli --no-onboard` during image build
+   - Runs only on `127.0.0.1:18789`
+   - Reads config from `/mnt/openclaw/openclaw.json`
 
-1. **Single Port Multiplexing**
-   - A lightweight HTTP/WS reverse proxy owns the public ingress port (default `18789`) and forwards both HTTP and WS traffic to the internal OpenClaw Gateway loopback port.
-   - `enclaver.yaml` only exposes one `ingress.listen_port` (default is 18789).
+The external browser never connects directly to a public OpenClaw socket. It connects to the manager, and the manager proxies `/openclaw` to the loopback gateway.
 
-2. **Enclave Compatible Defaults**
-   - Disables high-risk modules by default:
-     - `OPENCLAW_SKIP_CHANNELS=1`
-     - `OPENCLAW_SKIP_BROWSER_CONTROL_SERVER=1`
-     - `OPENCLAW_SKIP_CANVAS_HOST=1`
-   - Avoids systemd/daemon, runs the gateway directly in the foreground so Nitro/Enclaver sees a stable main process.
-   - Uses the host-backed mount path `/mnt/openclaw` for state, workspace, and runtime config.
-   - Keeps the real OpenClaw gateway on loopback so the process sees a local client path even when Nova/Enclaver forwards traffic in from outside.
+## Why This Replaces The Old Design
 
-3. **Host-Backed Mount Integration**
-   - `enclaver.yaml` declares:
-     - `storage.mounts[0].name=openclaw`
-     - `storage.mounts[0].mount_path=/mnt/openclaw`
-     - `storage.mounts[0].required=true`
-     - `storage.mounts[0].size_mb=10240` by default
-   - The generated image bundles a default config at `/etc/openclaw/default-openclaw.json`.
-   - On first boot, `entrypoint.sh` copies that config to `/mnt/openclaw/openclaw.json` if it does not already exist.
-   - On the host, Enclaver persists the mount as `.enclaver-hostfs/disk.img`; while the enclave is live, the mounted filesystem is visible under `.enclaver-hostfs/mnt-*/data`.
+The previous installer wrapped the published OpenClaw Docker image and then added a lightweight proxy. That was enough to surface the Control UI, but it left deployment concerns unresolved:
 
-4. **Secure Defaults**
-   - Automatically generates a 32-byte hex token on startup if `OPENCLAW_GATEWAY_TOKEN` is not provided.
-   - Forces UI/WS access in token mode.
-   - Enables `gateway.controlUi.dangerouslyAllowHostHeaderOriginFallback=true` because Nova deployment hostnames are not known at install time.
+- how to do first-run bootstrap cleanly
+- how to avoid hard-coding or shipping a long-lived gateway token
+- how to align with the hosted `/setup` plus `/openclaw` product pattern already used upstream
 
-5. **Resource Defaults**
-   - `cpu_count=2`
-   - `memory_mb=12288`
-   - Can be overridden via installer parameters.
+The new design moves these concerns into a dedicated manager service and uses the official CLI install path instead of the published Docker image.
 
-Operational note:
-- The current `ghcr.io/openclaw/openclaw:latest` EIF measured on `app-node` required at least `10640 MiB` of enclave memory at runtime, so the installer now defaults higher than the earlier `4096 MiB` baseline.
-- On small Nitro hosts, EIF packaging and enclave runtime may need different `allocator.yaml` settings: keep more RAM on the host for `enclaver build`, then reserve more RAM for `enclaver run`.
-- On `app-node`, direct external traffic to the OpenClaw gateway process produced unusable HTTP behavior, but the same process worked reliably when traffic was forwarded to a loopback-only gateway socket. The installer now bakes that proxy pattern in.
+## Generated Files
 
-## Script Parameters
+The installer now generates:
 
-`install_openclaw_nova_app.sh` supports:
+- `Dockerfile`
+  - `ubuntu:24.04`
+  - installs Node 22 at build time for the manager runtime
+  - installs OpenClaw CLI into `/opt/openclaw-cli` during image build
+- `entrypoint.sh`
+  - prepares mount directories and launches the manager
+- `openclaw_manager.mjs`
+  - manager HTTP service
+  - account auth
+  - OpenClaw install/setup/start/stop/restart logic
+  - `/openclaw` HTTP and WebSocket reverse proxy
+- `enclaver.yaml`
+  - exposes only the manager port
+  - declares the host-backed storage mount
+- `Makefile`
+  - `build-docker`
+  - `build-enclave`
+  - `run-local`
+- `build_release_image.sh`
+  - builds the EIF with `enclaver build --eif-only`
+  - packages the final release image on top of the `sleeve` base image
 
-- `--output-dir`
-- `--app-name`
-- `--app-image`
-- `--target-image`
-- `--gateway-port`
-- `--cpu-count`
-- `--memory-mb`
-- `--mount-name`
-- `--mount-path`
-- `--mount-size-mb`
+## Manager Flow
 
-## Deployment Flow (Target State)
+### First Run
 
-1. Run the installer in `openclaw-installer` to generate the app package.
-2. Use the Nova build process to execute `make build-docker` and `make build-enclave`.
-3. During deployment, Nova runtime binds the host-backed directory with `enclaver run --mount openclaw=<host_state_dir>`.
-4. OpenClaw starts with `/mnt/openclaw` as its writable data root.
-5. Users open the Control UI via the app URL and log in using the token.
+- No manager account exists
+- `GET /setup` shows the registration form
+- Submitted credentials are stored in `/mnt/openclaw/manager/state.json`
+- The manager sets an authenticated session cookie and redirects to the dashboard
 
-## Future Enhancements Proposals
+### After Registration
 
-- Add an `--enable-channels` flag to restore channel connectors on demand.
-- Add S3 snapshot helper scripts (state backup/restore).
-- Add health check and smoke test scripts.
+- `GET /login` becomes the normal entry point
+- After login, the dashboard allows:
+  - initializing OpenClaw
+  - restarting or stopping the gateway
+  - editing the top-level `models` section
+  - opening `/openclaw/`
+
+### OpenClaw Initialization
+
+When the user clicks Initialize:
+
+1. Verify the image-bundled OpenClaw CLI is present and record its version
+2. Run `openclaw setup --workspace /mnt/openclaw/workspace`
+3. Rewrite `openclaw.json` with manager-owned gateway settings
+4. Start `openclaw gateway run --bind loopback --port 18789 --allow-unconfigured`
+
+## Auth Model
+
+This design intentionally does not depend on shipping a public token.
+
+Instead, the generated `openclaw.json` configures:
+
+- `gateway.auth.mode = "trusted-proxy"`
+- `gateway.auth.trustedProxy.userHeader = "x-openclaw-user"`
+- `gateway.auth.trustedProxy.requiredHeaders = ["x-openclaw-authenticated"]`
+- `gateway.auth.trustedProxy.allowUsers = [<manager username>]`
+- `gateway.trustedProxies = ["127.0.0.1", "::1"]`
+- `gateway.controlUi.basePath = "/openclaw"`
+- `gateway.controlUi.dangerouslyAllowHostHeaderOriginFallback = true`
+
+The manager injects those headers only after its own login succeeds. Because current OpenClaw trusted-proxy operator auth satisfies the Control UI's pairing rules, the browser can enter `/openclaw` directly after manager login without a separate token handoff.
+
+## Config Ownership
+
+The manager preserves user-edited `models`, but always re-applies these fields:
+
+- `agents.defaults.workspace`
+- `gateway.mode`
+- `gateway.bind`
+- `gateway.port`
+- `gateway.auth.mode`
+- `gateway.auth.trustedProxy.*`
+- `gateway.trustedProxies`
+- `gateway.controlUi.enabled`
+- `gateway.controlUi.basePath`
+- `gateway.controlUi.dangerouslyAllowHostHeaderOriginFallback`
+
+This keeps the reverse-proxy topology stable even after later model updates.
+
+## Storage Layout
+
+All mutable runtime state lives under `/mnt/openclaw`:
+
+- `/mnt/openclaw/openclaw.json`
+- `/mnt/openclaw/openclaw.json.bak`
+- `/mnt/openclaw/workspace`
+- `/mnt/openclaw/manager/state.json`
+- `/mnt/openclaw/manager/logs/manager.log`
+- `/mnt/openclaw/manager/logs/openclaw.log`
+
+The OpenClaw CLI itself stays in the immutable image at `/opt/openclaw-cli`. This avoids hostfs incompatibilities around symlinks and executable-bit updates, while keeping all user state persistent in the mount.
+
+## Operational Notes
+
+- The manager autostarts OpenClaw on container boot only when the gateway had previously been initialized and left in the desired-running state.
+- The manager strips its own auth cookie before proxying to OpenClaw.
+- The manager handles both HTTP and WebSocket proxying so the hosted Control UI works end-to-end.
+- The generated image still defaults to `memory_mb=12288`, matching earlier Nitro runtime observations better than the earlier low baseline.
+- On `app-node`, this image-bundled layout has been validated under both plain Docker and real Nitro runtime using Enclaver host-backed mounts.
+- The generated `build-enclave` flow uses a helper script instead of raw `enclaver build`, because the larger manager-based image hit a reproducible late-stage `broken pipe` while Enclaver was packaging the release image.
+
+## Future Extensions
+
+- Replace the JSON textarea with a richer model/provider editor
+- Add multiple operator accounts instead of the current single-account bootstrap flow
+- Add controlled export or rotate actions for a support token if a future API-only use case requires one
+- Add platform-specific smoke tests on `app-node` after the new Ubuntu-based image has been validated there

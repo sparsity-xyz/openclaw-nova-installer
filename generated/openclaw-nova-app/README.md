@@ -1,4 +1,18 @@
-# OpenClaw Nova App (Generated)
+# OpenClaw Manager Nova App (Generated)
+
+This generated app exposes a single public service on port `8000`:
+
+- `GET /setup` for first-run account registration
+- `GET /login` for later logins
+- `GET /openclaw/` for the OpenClaw Control UI after manager authentication
+
+The image preinstalls OpenClaw with the official CLI installer:
+
+```bash
+curl -fsSL --proto '=https' --tlsv1.2 https://openclaw.ai/install-cli.sh | bash -s -- --prefix /opt/openclaw-cli --version latest --no-onboard
+```
+
+At runtime, all writable state stays under `/mnt/openclaw`.
 
 ## 1) Build docker image
 
@@ -12,32 +26,38 @@ make build-docker
 make build-enclave
 ```
 
+This helper builds the EIF first, then packages the final `sleeve`-based release image
+explicitly. That matches the artifact shape Enclaver expects while avoiding the
+`packaging EIF into release image` broken-pipe failure we observed on `app-node`.
+
 ## 3) Local smoke test
 
 ```bash
 make run-local
 ```
 
-Then open: http://127.0.0.1:18789/
+Then open `http://127.0.0.1:8000/setup` to register the first manager account.
 
-Use token:
-- If env `OPENCLAW_GATEWAY_TOKEN` was set, use that.
-- Otherwise token is printed in container logs.
+## Runtime Layout
 
-## Host-backed mount layout
+- Manager HTTP port: `8000`
+- Internal OpenClaw gateway port: `127.0.0.1:18789`
+- Manager state: `/mnt/openclaw/manager/state.json`
+- OpenClaw config: `/mnt/openclaw/openclaw.json`
+- OpenClaw workspace: `/mnt/openclaw/workspace`
+- OpenClaw CLI root: `/opt/openclaw-cli`
 
-- OpenClaw state, workspace, and runtime config live under `/mnt/openclaw`
-- On first boot the entrypoint copies the bundled default config to `/mnt/openclaw/openclaw.json`
-- The generated enclave manifest defaults to `memory_mb=12288`
-- A lightweight HTTP/WS reverse proxy listens on the public port `18789` and forwards to the loopback-only OpenClaw gateway on `127.0.0.1:18790`
-- The generated local smoke test simulates Nova's host-backed mount with `./openclaw-data -> /mnt/openclaw`
-- In Nova runtime, Enclaver/Nova will bind the host-backed directory through `storage.mounts[]` + `enclaver run --mount openclaw=...`
-- In Enclaver hostfs, the host state directory persists `.enclaver-hostfs/disk.img`; while the enclave is running, the mounted filesystem appears under `.enclaver-hostfs/mnt-*/data`
+## Auth Model
 
-## Nova Platform Submission Steps
+The manager owns the internet-facing login flow. OpenClaw itself runs in `gateway.auth.mode=trusted-proxy`, restricted to loopback trusted proxies only.
 
-1. Submit the current directory as a standalone Git repository (including `Dockerfile`, `enclaver.yaml`, `Makefile`).
-2. Create an App in the Nova Platform and provide the Git repository address.
-3. Create a Build (the `main` branch is recommended), and the platform will execute the build and package the enclave.
-4. Create a Deployment and publish it.
-5. After the deployment is complete, access the application URL (corresponding to `ingress.listen_port=18789`).
+That means:
+
+- users authenticate with the manager username/password
+- the manager reverse-proxies `/openclaw` to the internal gateway
+- the browser never needs a long-lived OpenClaw token
+- Control UI pairing is skipped because trusted-proxy operator auth is satisfied upstream
+
+## Model Configuration
+
+After login, the dashboard exposes a JSON editor for the top-level `models` section. Saving that form rewrites `openclaw.json`, preserves manager-owned gateway fields, and restarts the gateway.

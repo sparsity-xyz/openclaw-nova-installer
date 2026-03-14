@@ -9,7 +9,7 @@ api:
   listen_port: 18000
 
 ingress:
-  - listen_port: __GATEWAY_PORT__
+  - listen_port: __MANAGER_PORT__
 
 egress:
   allow:

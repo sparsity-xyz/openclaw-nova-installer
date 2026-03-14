@@ -1,84 +1,128 @@
 # OpenClaw on Nova Platform Feasibility Study
 
-## 1) Can it be fully automated and provide a Web UI?
+## Conclusion
 
-Conclusion: **High automation (80~90%) is achievable**.
+Yes, this is feasible, and the manager-based shape is stronger than the older "proxy the published Docker image" approach.
 
-- OpenClaw officially supports Dockerized runs, and the Control UI is provided by the Gateway on the same port by default.
-- The Nova app form factor matches the OpenClaw single-process Gateway well: only revealing one ingress port is needed.
-- A few manual steps remain:
-  - Setting up the model provider keys (like OpenAI/Anthropic)
-  - Replacing the gateway token for production
-  - Optional channel credentials configuration (Telegram/Discord, etc.)
+The recommended deployment shape is:
 
-## 2) Can the OpenClaw tech stack run within Nova?
+- public manager service on `8000`
+- first-run bootstrap on `/setup`
+- manager login after bootstrap
+- loopback-only OpenClaw gateway on `127.0.0.1:18789`
+- `/openclaw` reverse-proxied by the manager
+- `gateway.auth.mode="trusted-proxy"` instead of shipping a browser-visible long-lived token
 
-Conclusion: **The core can run, but some modules need to be disabled**.
+## Why The New Plan Is Better
 
-Runnable parts:
-- Node.js 22 + OpenClaw Gateway main process
-- Control UI / WebChat (multiplexed via Gateway on the same port)
-- Basic agent/runtime and tool orchestration
+The public Northflank OpenClaw deployment pattern already validates the general product flow:
 
-Needs to be disabled or restricted:
-- Modules dependent on host desktop capabilities (e.g., macOS/iOS/Android node, local GUI)
-- Browser control and Canvas host should be disabled by default (to reduce dependencies and resource consumption)
-- Running via systemd/daemon installation path is not recommended inside the enclave, switch to foreground execution.
+- a hosted setup step
+- a stable operator-facing path to the Control UI
+- a wrapper layer around the internal OpenClaw runtime
 
-## 3) Storage and Memory Recommendations
+The new installer design follows that direction closely, but adapts it to Nova's host-backed mount and Nitro runtime constraints.
 
-### Memory (for smooth running)
+## Technical Feasibility
 
-Suggested tiers:
-- Measured Nitro minimum for the current `ghcr.io/openclaw/openclaw:latest` EIF: `10640 MiB`
-- Installer default / recommended baseline: `12288 MiB`
-- Heavy load (multi-session/multi-plugin): `14336 MiB`+
+### 1) Installing OpenClaw for Nitro-hosted runtime
 
-Reasoning:
-- On `app-node` testing dated 2026-03-14, `nitro-cli run-enclave` rejected `4096 MiB` with `E26` and reported that at least `10640 MiB` was required for the generated EIF.
-- Enabling multiple features (channels, tools, retrieval) will further increase runtime heap pressure beyond that Nitro minimum.
-- EIF packaging is a separate host-memory concern: smaller Nitro nodes may need a lower `allocator.yaml` reservation during `enclaver build` so the host can finish `build-eif`.
+Feasible.
+
+The official OpenClaw CLI installer supports both:
+
+- `--prefix <path>`
+- `--no-onboard`
+
+However, real Enclaver host-backed mounts on Nitro do not reliably support the symlink and chmod behavior used by Node/npm-style installs. The validated production shape is therefore:
+
+- install the OpenClaw CLI into the image at `/opt/openclaw-cli`
+- keep state, config, logs, sessions, and workspace under `/mnt/openclaw`
+
+This preserves persistence where it matters while avoiding mount-level filesystem incompatibilities.
+
+### 2) First-run account registration
+
+Feasible.
+
+This logic belongs in `openclaw-manager`, not in OpenClaw itself. A small wrapper service can safely persist:
+
+- username
+- password hash + salt
+- manager session secret
+
+inside `/mnt/openclaw/manager/state.json`.
+
+### 3) Reverse-proxying `/openclaw`
+
+Feasible.
+
+The current OpenClaw gateway supports:
+
+- `gateway.controlUi.basePath = "/openclaw"`
+- hosted Control UI assets
+- WebSocket traffic over the same gateway
+
+So a single manager service can proxy both HTTP and WebSocket traffic to the internal loopback gateway.
+
+### 4) Avoiding exposed gateway tokens
+
+Feasible, and preferable.
+
+Current upstream OpenClaw supports:
+
+- `gateway.auth.mode = "trusted-proxy"`
+- `gateway.auth.trustedProxy.userHeader`
+- `gateway.auth.trustedProxy.requiredHeaders`
+- `gateway.auth.trustedProxy.allowUsers`
+- `gateway.trustedProxies`
+
+This lets the manager authenticate the user once, then assert the user identity into OpenClaw over loopback.
+
+An additional upstream benefit is that trusted-proxy operator auth satisfies the Control UI pairing gate, so the browser does not need an extra session approval dance when it comes through the manager.
+
+### 5) Model configuration from the manager
+
+Feasible.
+
+The simplest implementation is to let the manager own a JSON editor for the top-level `models` section, then rewrite `openclaw.json` and restart the gateway. This is much easier than trying to remotely drive interactive CLI onboarding inside the enclave.
+
+## Nitro / Nova Considerations
+
+### Memory
+
+Keep the current installer default at `12288 MiB` until the new Ubuntu-based image has been re-measured on Nitro.
+
+Reason:
+
+- the older OpenClaw-based image already needed roughly this class of runtime memory
+- the new manager layer is light, but the OpenClaw gateway remains the dominant memory consumer
 
 ### Storage
 
-Suggested tiers:
-- Images and base runtime: `8~12 GB`
-- Stable running with sessions/logs/cache: `20 GB`+
+Host-backed mount storage remains the right solution.
 
-Explanation:
-- OpenClaw writes state to `$OPENCLAW_STATE_DIR` by default (usually `~/.openclaw`).
-- Production environments require reserved space for logs, sessions, credentials, and plugin caching.
+Recommended baseline:
 
-## 4) Difficulty of changing local disk storage to S3
+- `size_mb = 10240` minimum
+- increase if long-running sessions, logs, caches, or more model artifacts accumulate
 
-Conclusion: **Medium-High Difficulty (about 7/10)**.
+### EIF Build vs Run
 
-Reasoning:
-- OpenClaw codebase heavily relies on local file semantics (directory structures, atomic writes, locking, session and cache files).
-- S3 is an object store and does not provide POSIX directories or atomic rename semantics.
-- Directly "replacing the filesystem with S3" would affect consistency, latency, and concurrency behavior.
+This concern remains separate from the app redesign:
 
-Feasible Roadmaps:
-- Short-term: Use Enclaver/Nova host-backed directory mounts so OpenClaw keeps normal file semantics under `/mnt/openclaw`, with optional snapshots/backups to S3.
-- Medium-term: State tiering (hot data stored locally, cold data archived to S3).
-- Long-term: Refactor the state backend (abstracting a storage adapter).
+- EIF build pressure is host-memory bound
+- enclave runtime pressure is reserved-enclave-memory bound
 
-## 5) Which modules might fail to run in AWS Nitro Enclaves?
+So allocator tuning may still need different settings for `enclaver build` and `enclaver run`.
 
-High Risk / Suggested to drop:
-- Modules relying on host OS GUI or mobile device bridging (macOS/iOS/Android node)
-- Daemonized processes requiring extra privileges or system service managers (systemd/launchd)
-- Capabilities depending on the local browser/graphics stack (browser control, certain canvas scenarios)
+## Recommended Product Direction
 
-Medium Risk:
-- Certain third-party channel connectors (depending on external binaries, long-lived connections, and complex credential refreshes)
+Use the manager-based flow and drop the older token-first public gateway exposure model.
 
-Low Risk:
-- Gateway Core + Web UI + basic chat/session capabilities
+That gives us:
 
----
-
-This research combines:
-- `enclaver/docs` description of the enclaver runtime model (ingress/egress, vsock, single-app process)
-- `app-template` build and deployment patterns for nova-app
-- OpenClaw official Docker / Gateway / Web documentation and repository configuration conventions
+- a cleaner hosted UX
+- a more defensible auth story for an open-source image
+- a deployment shape closer to the public hosted OpenClaw examples
+- better alignment with Nova host-backed storage
