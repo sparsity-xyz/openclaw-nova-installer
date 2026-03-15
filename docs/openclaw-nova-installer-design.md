@@ -1,102 +1,122 @@
-# OpenClaw Nova Installer Design
+# OpenClaw Manager Nova App Design
 
 ## Objective
 
-Generate a Nova-ready application package that runs an image-bundled OpenClaw CLI while keeping all mutable state in a host-backed mount, and expose a safer hosted control plane for first-run setup and later management.
+This repository should be deployable on Nova as-is.
 
-## High-Level Architecture
-
-The generated app contains two logical layers:
-
-1. `openclaw-manager`
-   - Public HTTP service on port `8000`
-   - Handles registration, login, initialization, config updates, and reverse proxying
-
-2. OpenClaw gateway
-   - Installed with `install-cli.sh --prefix /opt/openclaw-cli --no-onboard` during image build
-   - Runs only on `127.0.0.1:18789`
-   - Reads config from `/mnt/openclaw/openclaw.json`
-
-The external browser never connects directly to a public OpenClaw socket. It connects to the manager, and the manager proxies `/openclaw` to the loopback gateway.
-
-## Why This Replaces The Old Design
-
-The previous installer wrapped the published OpenClaw Docker image and then added a lightweight proxy. That was enough to surface the Control UI, but it left deployment concerns unresolved:
-
-- how to do first-run bootstrap cleanly
-- how to avoid hard-coding or shipping a long-lived gateway token
-- how to align with the hosted `/setup` plus `/openclaw` product pattern already used upstream
-
-The new design moves these concerns into a dedicated manager service and uses the official CLI install path instead of the published Docker image.
-
-## Generated Files
-
-The installer now generates:
+The repo root contains the Nova app:
 
 - `Dockerfile`
-  - `ubuntu:24.04`
-  - installs Node 22 at build time for the manager runtime
-  - installs OpenClaw CLI into `/opt/openclaw-cli` during image build
-- `entrypoint.sh`
-  - prepares mount directories and launches the manager
-- `openclaw_manager.mjs`
-  - manager HTTP service
-  - account auth
-  - OpenClaw install/setup/start/stop/restart logic
-  - `/openclaw` HTTP and WebSocket reverse proxy
 - `enclaver.yaml`
-  - exposes only the manager port
-  - declares the host-backed storage mount
+- `entrypoint.sh`
+- `openclaw_manager.mjs`
+
+No secondary generated app directory is required.
+
+## Runtime Components
+
+### `openclaw-manager`
+
+- listens on port `8000`
+- serves `/setup`, `/login`, and the dashboard
+- initializes OpenClaw on first use
+- manages start, stop, and restart actions
+- reverse-proxies `/openclaw` to the loopback gateway
+
+### OpenClaw Gateway
+
+- installed into `/opt/openclaw-cli` during image build
+- started by the manager only after initialization
+- bound to `127.0.0.1:18789`
+- configured through `/mnt/openclaw/openclaw.json`
+
+## Root-Level Files
+
+- `Dockerfile`
+  Builds the Ubuntu-based application image and installs Node plus the OpenClaw CLI.
+
+- `entrypoint.sh`
+  Prepares mount directories and launches the manager.
+
+- `openclaw_manager.mjs`
+  Implements the manager UI, login flow, config ownership, process supervision, and `/openclaw`
+  reverse proxy.
+
+- `enclaver.yaml`
+  Declares ingress, egress, storage, and default resource hints for the Nova deployment.
+
 - `Makefile`
-  - `build-docker`
-  - `build-enclave`
-  - `run-local`
+  Provides local `build-docker`, `build-enclave`, and `run-local` helpers.
+
 - `build_release_image.sh`
-  - builds the EIF with `enclaver build --eif-only`
-  - packages the final release image on top of the `sleeve` base image
+  Builds the EIF and packages the final release image for local release validation.
+
+## Nova Workflow
+
+Nova should use this repository root directly as the app source.
+
+### Create App
+
+At app creation time, configure:
+
+- ingress port `8000`
+- host-backed mount name `openclaw`
+- host-backed mount path `/mnt/openclaw`
+- host-backed mount size `10240 MiB` minimum
+
+These settings define the persistent storage and public entrypoint for the app.
+
+### Build Version
+
+Build versions directly from this repository root.
+
+Nova should consume the checked-in:
+
+- `Dockerfile`
+- `enclaver.yaml`
+
+No generated sub-application directory is required.
+
+### Deploy Version
+
+At deploy time, choose the Nova `Performance` tier.
+
+This app is not a good fit for the `Standard` tier because the OpenClaw gateway is the main
+runtime memory consumer.
 
 ## Manager Flow
 
-### First Run
+### First Boot
 
-- No manager account exists
-- `GET /setup` shows the registration form
-- Submitted credentials are stored in `/mnt/openclaw/manager/state.json`
-- The manager sets an authenticated session cookie and redirects to the dashboard
+- `/setup` creates the first manager account
+- credentials are stored in `/mnt/openclaw/manager/state.json`
+- the manager redirects the operator to the dashboard
 
-### After Registration
+### Initialization
 
-- `GET /login` becomes the normal entry point
-- After login, the dashboard allows:
-  - initializing OpenClaw
-  - restarting or stopping the gateway
-  - editing the top-level `models` section
-  - opening `/openclaw/`
+When the operator clicks `Initialize OpenClaw`, the manager:
 
-### OpenClaw Initialization
+1. verifies the bundled OpenClaw CLI
+2. runs `openclaw setup --workspace /mnt/openclaw/workspace`
+3. writes manager-owned gateway settings into `openclaw.json`
+4. starts the OpenClaw gateway on loopback
 
-When the user clicks Initialize:
+### Normal Operation
 
-1. Verify the image-bundled OpenClaw CLI is present and record its version
-2. Run `openclaw setup --workspace /mnt/openclaw/workspace`
-3. Rewrite `openclaw.json` with manager-owned gateway settings
-4. Start `openclaw gateway run --bind loopback --port 18789 --allow-unconfigured`
+After initialization, the dashboard can:
+
+- open `/openclaw/` in a new tab
+- restart or stop the gateway
+- show manager and OpenClaw log tails
+- edit the top-level `models` JSON and restart the gateway
 
 ## Auth Model
 
-This design intentionally does not depend on shipping a public token.
+The manager owns the public authentication flow.
 
-Instead, the generated `openclaw.json` configures:
-
-- `gateway.auth.mode = "trusted-proxy"`
-- `gateway.auth.trustedProxy.userHeader = "x-openclaw-user"`
-- `gateway.auth.trustedProxy.requiredHeaders = ["x-openclaw-authenticated"]`
-- `gateway.auth.trustedProxy.allowUsers = [<manager username>]`
-- `gateway.trustedProxies = ["127.0.0.1", "::1"]`
-- `gateway.controlUi.basePath = "/openclaw"`
-- `gateway.controlUi.dangerouslyAllowHostHeaderOriginFallback = true`
-
-The manager injects those headers only after its own login succeeds. Because current OpenClaw trusted-proxy operator auth satisfies the Control UI's pairing rules, the browser can enter `/openclaw` directly after manager login without a separate token handoff.
+OpenClaw runs with trusted-proxy auth enabled and only accepts proxied requests from loopback.
+The manager injects the required trusted-proxy headers after its own login succeeds, so the
+browser never connects directly to a public OpenClaw socket.
 
 ## Config Ownership
 
@@ -113,11 +133,9 @@ The manager preserves user-edited `models`, but always re-applies these fields:
 - `gateway.controlUi.basePath`
 - `gateway.controlUi.dangerouslyAllowHostHeaderOriginFallback`
 
-This keeps the reverse-proxy topology stable even after later model updates.
-
 ## Storage Layout
 
-All mutable runtime state lives under `/mnt/openclaw`:
+All mutable state lives under `/mnt/openclaw`:
 
 - `/mnt/openclaw/openclaw.json`
 - `/mnt/openclaw/openclaw.json.bak`
@@ -126,20 +144,27 @@ All mutable runtime state lives under `/mnt/openclaw`:
 - `/mnt/openclaw/manager/logs/manager.log`
 - `/mnt/openclaw/manager/logs/openclaw.log`
 
-The OpenClaw CLI itself stays in the immutable image at `/opt/openclaw-cli`. This avoids hostfs incompatibilities around symlinks and executable-bit updates, while keeping all user state persistent in the mount.
+## Runtime Proxy Environment
+
+Inside Nova, outbound HTTP/HTTPS from the enclave always flows through Enclaver/Odyn's egress
+proxy. The app does not have direct internet access.
+
+When `egress` is enabled, Odyn injects these variables before `entrypoint.sh` launches the
+manager:
+
+- `http_proxy`, `https_proxy`, `HTTP_PROXY`, `HTTPS_PROXY`
+- `no_proxy`, `NO_PROXY`
+
+Those values point to `http://127.0.0.1:<proxy_port>` and keep `localhost,127.0.0.1` off the
+proxy path. This app assumes Odyn has already injected them before the manager starts.
+
+Operators do not need to define custom proxy environment variables for the normal Nova deployment
+path. The key requirement is that `egress` remains enabled and the manifest allows the external
+destinations OpenClaw needs.
 
 ## Operational Notes
 
-- The manager autostarts OpenClaw on container boot only when the gateway had previously been initialized and left in the desired-running state.
-- The manager strips its own auth cookie before proxying to OpenClaw.
-- The manager handles both HTTP and WebSocket proxying so the hosted Control UI works end-to-end.
-- The generated image still defaults to `memory_mb=12288`, matching earlier Nitro runtime observations better than the earlier low baseline.
-- On `app-node`, this image-bundled layout has been validated under both plain Docker and real Nitro runtime using Enclaver host-backed mounts.
-- The generated `build-enclave` flow uses a helper script instead of raw `enclaver build`, because the larger manager-based image hit a reproducible late-stage `broken pipe` while Enclaver was packaging the release image.
-
-## Future Extensions
-
-- Replace the JSON textarea with a richer model/provider editor
-- Add multiple operator accounts instead of the current single-account bootstrap flow
-- Add controlled export or rotate actions for a support token if a future API-only use case requires one
-- Add platform-specific smoke tests on `app-node` after the new Ubuntu-based image has been validated there
+- the manager only autostarts OpenClaw on boot after a successful prior initialization
+- the manager strips its own auth cookie before proxying to OpenClaw
+- the manager handles both HTTP and WebSocket proxying for `/openclaw`
+- on Nova's current deployment UI, tier selection happens at `Deploy Version`

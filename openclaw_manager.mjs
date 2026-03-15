@@ -117,6 +117,22 @@ function timestamp() {
   return new Date().toISOString();
 }
 
+function extractCliVersion(output) {
+  const text = String(output ?? "").trim();
+  if (!text) {
+    return "";
+  }
+
+  const versionMatch = text.match(/\bv?\d+(?:\.\d+){1,3}(?:[-+][0-9A-Za-z.-]+)?\b/);
+  if (versionMatch) {
+    return versionMatch[0].replace(/^v/, "");
+  }
+
+  const firstLine = text.split("\n").map((line) => line.trim()).find(Boolean) ?? text;
+  const cleaned = firstLine.replace(/^OpenClaw(?:\s+CLI)?(?:\s+version)?[:\s-]*/i, "").trim();
+  return cleaned || firstLine;
+}
+
 function pushLog(buffer, line) {
   buffer.push(line);
   while (buffer.length > 160) {
@@ -452,16 +468,35 @@ async function runCommandOrThrow(command, args, options = {}) {
   return result;
 }
 
-async function ensureOpenClawInstalled() {
+async function refreshOpenClawCliVersion({ failIfMissing = false } = {}) {
   if (!existsSync(OPENCLAW_BIN)) {
-    throw new Error(`OpenClaw CLI is missing from ${OPENCLAW_PREFIX}. Rebuild the image.`);
+    if (failIfMissing) {
+      throw new Error(`OpenClaw CLI is missing from ${OPENCLAW_PREFIX}. Rebuild the image.`);
+    }
+
+    if (state.openclaw.cliVersion !== null) {
+      state.openclaw.cliVersion = null;
+      await saveState();
+    }
+    return null;
   }
 
   const version = await runCommandOrThrow(OPENCLAW_BIN, ["--version"], {
     env: openClawEnv(),
   });
-  state.openclaw.cliVersion = version.stdout.trim().split(/\s+/)[0] ?? OPENCLAW_VERSION;
-  await saveState();
+  const rawVersion = [version.stdout, version.stderr].map((part) => part.trim()).filter(Boolean).join("\n");
+  const cliVersion = extractCliVersion(rawVersion) || OPENCLAW_VERSION;
+
+  if (state.openclaw.cliVersion !== cliVersion) {
+    state.openclaw.cliVersion = cliVersion;
+    await saveState();
+  }
+
+  return cliVersion;
+}
+
+async function ensureOpenClawInstalled() {
+  await refreshOpenClawCliVersion({ failIfMissing: true });
 }
 
 async function ensureOpenClawSetup() {
@@ -1039,6 +1074,40 @@ function renderShell({ title, subtitle = "", body, notice = "", error = "" }) {
     ${error ? `<div class="banner error">${htmlEscape(error)}</div>` : ""}
     ${body}
   </main>
+  <script>
+    (() => {
+      const formatter = new Intl.DateTimeFormat(undefined, {
+        year: "numeric",
+        month: "2-digit",
+        day: "2-digit",
+        hour: "2-digit",
+        minute: "2-digit",
+        second: "2-digit",
+        hourCycle: "h23",
+      });
+
+      for (const node of document.querySelectorAll("[data-log-tail]")) {
+        const next = node.textContent
+          .split("\\n")
+          .map((line) => {
+            const match = line.match(/^\\[([^\\]]+)\\]\\s?(.*)$/);
+            if (!match) {
+              return line;
+            }
+
+            const date = new Date(match[1]);
+            if (Number.isNaN(date.getTime())) {
+              return line;
+            }
+
+            return \`[\${formatter.format(date)}] \${match[2]}\`;
+          })
+          .join("\\n");
+
+        node.textContent = next;
+      }
+    })();
+  </script>
 </body>
 </html>`;
 }
@@ -1142,11 +1211,7 @@ async function renderDashboardPage(url) {
             </div>
             <div class="kv-row">
               <div class="kv-key">CLI version</div>
-              <div>${htmlEscape(state.openclaw.cliVersion || OPENCLAW_VERSION)}</div>
-            </div>
-            <div class="kv-row">
-              <div class="kv-key">Manager port</div>
-              <div>${MANAGER_PORT}</div>
+              <div>${htmlEscape(state.openclaw.cliVersion || (installed ? "Unknown" : "Not installed"))}</div>
             </div>
             <div class="kv-row">
               <div class="kv-key">Internal gateway port</div>
@@ -1181,7 +1246,7 @@ async function renderDashboardPage(url) {
             <form class="inline-form" method="post" action="/actions/stop">
               <button type="submit" class="secondary">Stop gateway</button>
             </form>
-            <a class="button" href="/openclaw/">Open /openclaw</a>
+            <a class="button" href="/openclaw/" target="_blank" rel="noopener noreferrer">Open /openclaw</a>
             <form class="inline-form" method="post" action="/logout">
               <button type="submit" class="secondary">Logout</button>
             </form>
@@ -1210,11 +1275,11 @@ async function renderDashboardPage(url) {
         <section class="grid">
           <article class="card">
             <h3>Manager log tail</h3>
-            <pre>${htmlEscape(lastManagerLogs || "No manager logs yet.")}</pre>
+            <pre data-log-tail="manager">${htmlEscape(lastManagerLogs || "No manager logs yet.")}</pre>
           </article>
           <article class="card">
             <h3>OpenClaw log tail</h3>
-            <pre>${htmlEscape(lastOpenClawLogs || "No OpenClaw logs yet.")}</pre>
+            <pre data-log-tail="openclaw">${htmlEscape(lastOpenClawLogs || "No OpenClaw logs yet.")}</pre>
           </article>
         </section>
       </section>
@@ -1574,6 +1639,12 @@ async function routeRequest(req, res) {
 async function boot() {
   await ensureLayout();
   await loadState();
+  try {
+    await refreshOpenClawCliVersion();
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    logManager(`Failed to detect OpenClaw CLI version: ${message}`);
+  }
 
   if (
     state.auth &&

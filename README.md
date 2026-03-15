@@ -1,127 +1,129 @@
-# OpenClaw Installer for Nova Platform
+# OpenClaw Manager for Nova Platform
 
-This repository now generates a Nova app centered on `openclaw-manager`, not a repackaged `ghcr.io/openclaw/openclaw:latest` image.
+OpenClaw Manager is a Nova app for hosting and operating OpenClaw behind a managed web control
+plane.
 
-The generated runtime uses:
+It gives you a single public entrypoint for:
 
-- `ubuntu:24.04` as the base image
-- the official OpenClaw CLI installer with `--no-onboard`, executed at image build time
-- a host-backed mount at `/mnt/openclaw`
-- a manager service on port `8000`
-- an internal OpenClaw gateway on `127.0.0.1:18789`
-- `gateway.auth.mode=trusted-proxy` so the manager owns internet-facing auth
+- first-run account setup at `/setup`
+- manager login at `/login`
+- OpenClaw initialization
+- gateway start, stop, and restart
+- managed updates to `openclaw.json`
+- authenticated access to the OpenClaw Control UI at `/openclaw/`
 
-This matches the hosted product shape used by the public Northflank deployment pattern: bootstrap with `/setup`, then sign in and reach the Control UI through `/openclaw`.
+Internally, the app keeps the OpenClaw CLI in the image at `/opt/openclaw-cli`, persists runtime
+state on a host-backed mount at `/mnt/openclaw`, and runs the OpenClaw gateway only on
+`127.0.0.1:18789`.
 
-## Quick Start
+## Deploy on Nova Platform
 
-```bash
-chmod +x scripts/install_openclaw_nova_app.sh
-./scripts/install_openclaw_nova_app.sh
-```
+### 1) Create App
 
-By default, it generates:
+Create the Nova app from this repository root.
 
-- `generated/openclaw-nova-app/Dockerfile`
-- `generated/openclaw-nova-app/enclaver.yaml`
-- `generated/openclaw-nova-app/openclaw_manager.mjs`
-- `generated/openclaw-nova-app/entrypoint.sh`
-- `generated/openclaw-nova-app/build_release_image.sh`
-- `generated/openclaw-nova-app/Makefile`
-- `generated/openclaw-nova-app/README.md`
-- `generated/openclaw-nova-app/NOVA_SUBMISSION_CHECKLIST.md`
+At the `Create App` stage, configure:
 
-## Default Runtime Shape
+- ingress port: `8000`
+- host-backed mount name: `openclaw`
+- host-backed mount path: `/mnt/openclaw`
+- host-backed mount size: `10240 MiB` minimum
 
-- Public port: `8000`
-- First-run registration: `/setup`
-- Login: `/login`
-- OpenClaw Control UI: `/openclaw/`
-- Internal gateway port: `127.0.0.1:18789`
-- Data root: `/mnt/openclaw`
-- OpenClaw CLI root: `/opt/openclaw-cli`
-- OpenClaw config: `/mnt/openclaw/openclaw.json`
-- Manager state: `/mnt/openclaw/manager/state.json`
+Those settings define the app's persistent storage and public network entrypoint.
 
-## Why The Architecture Changed
+### 2) Build Version
 
-The old approach depended on the published OpenClaw Docker image and then wrapped it with a small proxy. That solved some runtime issues, but it still left three product gaps:
+After the app exists, build a version from this repository.
 
-- external auth and first-run bootstrap were awkward
-- token ownership was unclear for an open-source deployment
-- the deployment shape did not match the hosted `/setup` plus `/openclaw` pattern already used upstream
+Nova should build from the checked-in root files, including:
 
-The new design fixes that by introducing a dedicated manager service.
+- `Dockerfile`
+- `enclaver.yaml`
 
-## Manager Responsibilities
+### 3) Deploy Version
 
-`openclaw-manager` now owns:
+When deploying a built version, select:
 
-- first-run username/password registration
-- later username/password login
-- verifying the image-bundled OpenClaw CLI and recording its version
-- running `openclaw setup`
-- writing the manager-owned parts of `openclaw.json`
-- updating the top-level `models` section from a JSON editor
-- starting, stopping, and restarting the OpenClaw gateway
-- reverse-proxying `/openclaw` to `127.0.0.1:18789`
+- compute tier: `Performance`
 
-## Trusted-Proxy Auth
+Do not use the `Standard` tier for this app.
 
-The manager no longer relies on handing a long-lived gateway token to the browser.
+Keep outbound egress enabled for this app. Inside a Nova enclave, OpenClaw Manager and the
+OpenClaw CLI cannot reach the internet directly; outbound HTTP/HTTPS traffic must go through the
+Enclaver/Odyn egress proxy.
 
-Instead, the generated config sets:
+When `egress` is enabled, Odyn automatically injects these standard proxy variables into the app
+process before `entrypoint.sh` starts:
 
-- `gateway.auth.mode=trusted-proxy`
-- `gateway.auth.trustedProxy.userHeader=x-openclaw-user`
-- `gateway.auth.trustedProxy.requiredHeaders=["x-openclaw-authenticated"]`
-- `gateway.auth.trustedProxy.allowUsers=[<manager username>]`
-- `gateway.trustedProxies=["127.0.0.1","::1"]`
-- `gateway.controlUi.basePath="/openclaw"`
+- `http_proxy`, `https_proxy`, `HTTP_PROXY`, `HTTPS_PROXY`
+- `no_proxy`, `NO_PROXY`
 
-That lets the manager authenticate users once, then project the authenticated operator identity into the loopback-only OpenClaw gateway. In current upstream OpenClaw, trusted-proxy operator auth also skips the normal Control UI pairing requirement, which is exactly what we want for a hosted wrapper service.
+For the normal Nova deployment path, you do not need to add custom proxy environment variables by
+hand. The important requirement is that egress stays enabled and the destinations OpenClaw needs
+are allowed by [enclaver.yaml](/Users/zfdang/workspaces/openclaw-nova-installer/enclaver.yaml).
 
-## Customization
+### 4) Finish Setup
 
-```bash
-./scripts/install_openclaw_nova_app.sh \
-  --output-dir ./generated/openclaw-nova-app \
-  --app-name openclaw-manager \
-  --app-image openclaw-manager-app:latest \
-  --target-image openclaw-manager:latest \
-  --manager-port 8000 \
-  --openclaw-port 18789 \
-  --cpu-count 2 \
-  --memory-mb 12288 \
-  --openclaw-version latest \
-  --mount-name openclaw \
-  --mount-path /mnt/openclaw \
-  --mount-size-mb 10240
-```
+After the version is deployed:
 
-## Build Flow
+- open `https://<your-app>/setup`
+- create the first manager account
+- sign in to the manager dashboard
+- click `Initialize OpenClaw`
+- review or edit the `models` JSON
+- click `Open /openclaw` to open the Control UI in a new tab
+
+If `/setup` loads but OpenClaw later fails to initialize, first double-check:
+
+- the app was created with the required host-backed mount
+- the deployed version is using the `Performance` tier
+- outbound egress is enabled and the required destinations are allowed by [enclaver.yaml](/Users/zfdang/workspaces/openclaw-nova-installer/enclaver.yaml)
+
+If OpenClaw itself reports network access problems and needs an explicit proxy configuration, use
+the Enclaver egress proxy values directly:
+
+- HTTP proxy: `http://127.0.0.1:10000`
+- HTTPS proxy: `http://127.0.0.1:10000`
+- `NO_PROXY`: `localhost,127.0.0.1`
+
+This repo does not override `egress.proxy_port` in [enclaver.yaml](/Users/zfdang/workspaces/openclaw-nova-installer/enclaver.yaml), so it uses Enclaver's default proxy port `10000`.
+
+## Local Development
+
+For local validation from the repo root:
 
 ```bash
-cd generated/openclaw-nova-app
 make build-docker
-make build-enclave
+make run-local
+```
+
+`make run-local` runs this app in ordinary Docker, not inside Enclaver. If your local Docker
+environment already needs an outbound proxy, export the usual proxy variables before starting the
+container:
+
+```bash
+export http_proxy=http://proxy.example.com:7890
+export https_proxy=http://proxy.example.com:7890
+export no_proxy=127.0.0.1,localhost
 make run-local
 ```
 
 Then open `http://127.0.0.1:8000/setup`.
 
-`make build-enclave` now wraps Enclaver's hidden `--eif-only` mode and then builds the final
-`sleeve`-based release image explicitly. That matches what we validated on `app-node`, where the
-plain `enclaver build` path hit a late `packaging EIF into release image` broken-pipe failure.
+`make build-enclave` is available if you want to build the EIF and final release image locally.
 
-## Notes
+## Runtime Layout
 
-- The generated OpenClaw config preserves the user-edited `models` section, but the manager always rewrites the gateway auth, trusted proxy, bind, port, and Control UI base path fields.
-- OpenClaw binaries now live in the image at `/opt/openclaw-cli`, while all mutable deployment state stays under `/mnt/openclaw`.
-- This change is intentional: Enclaver host-backed mounts do not reliably support the symlink and chmod behavior that a Node/npm-style CLI install expects, so keeping the CLI in the image is the stable Nitro-compatible shape.
-- The installer still defaults to `memory_mb=12288`, which matched the earlier Nitro runtime findings better than the original smaller profile.
+- public manager port: `8000`
+- OpenClaw gateway: `127.0.0.1:18789`
+- data root: `/mnt/openclaw`
+- manager state: `/mnt/openclaw/manager/state.json`
+- manager logs: `/mnt/openclaw/manager/logs/manager.log`
+- OpenClaw logs: `/mnt/openclaw/manager/logs/openclaw.log`
+- OpenClaw config: `/mnt/openclaw/openclaw.json`
+- OpenClaw workspace: `/mnt/openclaw/workspace`
+- OpenClaw CLI root: `/opt/openclaw-cli`
 
-## Design Docs
+## Reference
 
-- `docs/openclaw-nova-feasibility.md`
 - `docs/openclaw-nova-installer-design.md`
