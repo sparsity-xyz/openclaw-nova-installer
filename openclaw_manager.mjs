@@ -28,6 +28,142 @@ const TRUSTED_PROXY_USER_HEADER = "x-openclaw-user";
 const TRUSTED_PROXY_REQUIRED_HEADER = "x-openclaw-authenticated";
 const TRUSTED_PROXY_REQUIRED_VALUE = "true";
 
+const MODEL_WIZARD_TEMPLATES = [
+  {
+    id: "anthropic",
+    label: "Anthropic API key",
+    description: "Use the built-in Anthropic provider with an API key, similar to OpenClaw onboarding.",
+    providerId: "anthropic",
+    apiDefault: "",
+    apiEditable: false,
+    showApi: false,
+    baseUrlDefault: "",
+    showBaseUrl: false,
+    baseUrlRequired: false,
+    apiKeyDefault: "",
+    apiKeyRequired: true,
+    modelIdDefault: "claude-opus-4-6",
+    modelNameDefault: "Claude Opus 4.6",
+    includeModelDefault: false,
+    modelRequired: false,
+    providerIdEditable: false,
+  },
+  {
+    id: "openai",
+    label: "OpenAI API key",
+    description: "Use the built-in OpenAI provider with a standard OpenAI API key.",
+    providerId: "openai",
+    apiDefault: "",
+    apiEditable: false,
+    showApi: false,
+    baseUrlDefault: "",
+    showBaseUrl: false,
+    baseUrlRequired: false,
+    apiKeyDefault: "",
+    apiKeyRequired: true,
+    modelIdDefault: "gpt-5.2",
+    modelNameDefault: "GPT-5.2",
+    includeModelDefault: false,
+    modelRequired: false,
+    providerIdEditable: false,
+  },
+  {
+    id: "openrouter",
+    label: "OpenRouter",
+    description: "Configure the built-in OpenRouter provider with one API key for many hosted models.",
+    providerId: "openrouter",
+    apiDefault: "",
+    apiEditable: false,
+    showApi: false,
+    baseUrlDefault: "",
+    showBaseUrl: false,
+    baseUrlRequired: false,
+    apiKeyDefault: "",
+    apiKeyRequired: true,
+    modelIdDefault: "anthropic/claude-sonnet-4-5",
+    modelNameDefault: "Claude Sonnet 4.5 via OpenRouter",
+    includeModelDefault: false,
+    modelRequired: false,
+    providerIdEditable: false,
+  },
+  {
+    id: "moonshot",
+    label: "Moonshot / Kimi",
+    description: "Create the OpenAI-compatible Moonshot provider entry that OpenClaw documents for Kimi.",
+    providerId: "moonshot",
+    apiDefault: "openai-completions",
+    apiEditable: false,
+    showApi: true,
+    baseUrlDefault: "https://api.moonshot.ai/v1",
+    showBaseUrl: true,
+    baseUrlRequired: true,
+    apiKeyDefault: "",
+    apiKeyRequired: true,
+    modelIdDefault: "kimi-k2.5",
+    modelNameDefault: "Kimi K2.5",
+    includeModelDefault: true,
+    modelRequired: true,
+    providerIdEditable: false,
+  },
+  {
+    id: "ollama",
+    label: "Ollama",
+    description: "Configure a local or remote Ollama server with OpenClaw's native Ollama API mode.",
+    providerId: "ollama",
+    apiDefault: "ollama",
+    apiEditable: false,
+    showApi: true,
+    baseUrlDefault: "http://127.0.0.1:11434",
+    showBaseUrl: true,
+    baseUrlRequired: true,
+    apiKeyDefault: "ollama-local",
+    apiKeyRequired: true,
+    modelIdDefault: "glm-4.7-flash",
+    modelNameDefault: "GLM 4.7 Flash",
+    includeModelDefault: true,
+    modelRequired: true,
+    providerIdEditable: false,
+  },
+  {
+    id: "custom-openai",
+    label: "Custom OpenAI-compatible",
+    description: "For proxies or gateways such as LiteLLM, vLLM, LM Studio, or other OpenAI-compatible services.",
+    providerId: "custom-provider",
+    apiDefault: "openai-completions",
+    apiEditable: true,
+    showApi: true,
+    baseUrlDefault: "",
+    showBaseUrl: true,
+    baseUrlRequired: true,
+    apiKeyDefault: "",
+    apiKeyRequired: true,
+    modelIdDefault: "your-model-id",
+    modelNameDefault: "Your Model",
+    includeModelDefault: true,
+    modelRequired: true,
+    providerIdEditable: true,
+  },
+  {
+    id: "custom-anthropic",
+    label: "Custom Anthropic-compatible",
+    description: "For Anthropic-compatible proxies or managed gateways that need a custom base URL.",
+    providerId: "custom-provider",
+    apiDefault: "anthropic-messages",
+    apiEditable: true,
+    showApi: true,
+    baseUrlDefault: "",
+    showBaseUrl: true,
+    baseUrlRequired: true,
+    apiKeyDefault: "",
+    apiKeyRequired: true,
+    modelIdDefault: "your-model-id",
+    modelNameDefault: "Your Model",
+    includeModelDefault: true,
+    modelRequired: true,
+    providerIdEditable: true,
+  },
+];
+
 const recentManagerLogs = [];
 const recentOpenClawLogs = [];
 
@@ -226,6 +362,10 @@ function htmlEscape(value) {
 
 function safeJson(value) {
   return JSON.stringify(value, null, 2);
+}
+
+function safeScriptJson(value) {
+  return JSON.stringify(value).replaceAll("<", "\\u003c");
 }
 
 function cleanObject(value) {
@@ -802,6 +942,144 @@ function noticeFromUrl(url, key) {
   return url.searchParams.get(key) ?? "";
 }
 
+function renderModelWizard() {
+  const templateOptions = MODEL_WIZARD_TEMPLATES.map(
+    (template) => `<option value="${htmlEscape(template.id)}">${htmlEscape(template.label)}</option>`,
+  ).join("");
+
+  return `
+    <div class="wizard-toolbar">
+      <button type="button" class="secondary" data-model-wizard-open>Open model wizard</button>
+      <p class="muted wizard-caption">
+        Use a guided flow for common OpenClaw model providers, then review the generated JSON before saving.
+      </p>
+      <div class="wizard-status muted" data-model-wizard-status></div>
+    </div>
+
+    <dialog class="wizard-dialog" data-model-wizard>
+      <form class="wizard-form" data-model-wizard-form>
+        <div class="wizard-head">
+          <div class="wizard-copy">
+            <h3>Model setup wizard</h3>
+            <p class="muted">
+              This mirrors OpenClaw's usual model setup flow: choose a provider, enter auth and endpoint details,
+              then insert the generated provider entry into the manager-owned <code>models</code> JSON. OAuth or
+              setup-token flows still need to be completed inside OpenClaw itself.
+            </p>
+          </div>
+          <button type="button" class="secondary" data-model-wizard-close>Close</button>
+        </div>
+
+        <div class="wizard-grid">
+          <label>
+            Provider template
+            <select data-model-wizard-template>
+              ${templateOptions}
+            </select>
+            <span class="field-help" data-model-wizard-template-help></span>
+          </label>
+
+          <label>
+            models.mode
+            <select data-model-wizard-mode>
+              <option value="merge">merge</option>
+              <option value="replace">replace</option>
+            </select>
+            <span class="field-help">Use <code>merge</code> unless you want this config to replace the whole generated catalog.</span>
+          </label>
+
+          <label>
+            Provider ID
+            <input data-model-wizard-provider placeholder="provider-id" />
+            <span class="field-help" data-model-wizard-provider-help></span>
+          </label>
+
+          <label data-model-wizard-base-url-wrap>
+            Base URL
+            <input data-model-wizard-base-url placeholder="https://example.com/v1" spellcheck="false" />
+            <span class="field-help" data-model-wizard-base-url-help></span>
+          </label>
+
+          <label data-model-wizard-api-wrap>
+            API adapter
+            <select data-model-wizard-api>
+              <option value="openai-completions">openai-completions</option>
+              <option value="openai-responses">openai-responses</option>
+              <option value="anthropic-messages">anthropic-messages</option>
+              <option value="google-generative-ai">google-generative-ai</option>
+              <option value="ollama">ollama</option>
+            </select>
+            <span class="field-help" data-model-wizard-api-help></span>
+          </label>
+
+          <label>
+            API key
+            <input type="password" data-model-wizard-api-key autocomplete="off" spellcheck="false" />
+            <span class="field-help">Use the plaintext key that should be written into the JSON.</span>
+          </label>
+        </div>
+
+        <label class="toggle" data-model-wizard-model-toggle-wrap>
+          <input type="checkbox" data-model-wizard-include-model />
+          Add or update an explicit model entry
+        </label>
+
+        <div class="wizard-grid" data-model-wizard-model-fields>
+          <label>
+            Model ID
+            <input data-model-wizard-model-id placeholder="provider/model-id" spellcheck="false" />
+            <span class="field-help">The part after <code>provider/</code> in OpenClaw model references.</span>
+          </label>
+
+          <label>
+            Model name
+            <input data-model-wizard-model-name placeholder="Display name" />
+            <span class="field-help">Optional label for the OpenClaw model picker.</span>
+          </label>
+
+          <label>
+            Context length
+            <input type="number" min="1" step="1" data-model-wizard-context-window placeholder="128000" />
+            <span class="field-help">Recommended when you want a precise context limit instead of relying on the upstream catalog.</span>
+          </label>
+
+          <label>
+            Max output tokens
+            <input type="number" min="1" step="1" data-model-wizard-max-tokens placeholder="8192" />
+            <span class="field-help">Optional output token cap for this explicit model entry.</span>
+          </label>
+        </div>
+
+        <div class="wizard-options" data-model-wizard-model-options>
+          <label class="checkbox">
+            <input type="checkbox" data-model-wizard-reasoning />
+            Mark as a reasoning model
+          </label>
+          <label class="checkbox">
+            <input type="checkbox" data-model-wizard-image />
+            Mark as image-capable
+          </label>
+        </div>
+
+        <p class="muted wizard-note" data-model-wizard-model-note></p>
+        <div class="banner error hidden" data-model-wizard-error></div>
+
+        <div class="wizard-preview">
+          <div class="kv-key">Generated preview</div>
+          <pre data-model-wizard-preview>Choose a template to generate JSON.</pre>
+        </div>
+
+        <div class="actions">
+          <button type="submit">Apply to JSON editor</button>
+          <button type="button" class="secondary" data-model-wizard-reset>Reset wizard</button>
+        </div>
+      </form>
+    </dialog>
+
+    <script type="application/json" id="model-wizard-templates">${safeScriptJson(MODEL_WIZARD_TEMPLATES)}</script>
+  `;
+}
+
 function renderShell({ title, subtitle = "", body, notice = "", error = "" }) {
   return `<!doctype html>
 <html lang="en">
@@ -936,6 +1214,7 @@ function renderShell({ title, subtitle = "", body, notice = "", error = "" }) {
     }
 
     input,
+    select,
     textarea {
       width: 100%;
       border: 1px solid rgba(39, 31, 24, 0.16);
@@ -990,6 +1269,100 @@ function renderShell({ title, subtitle = "", body, notice = "", error = "" }) {
       display: flex;
       flex-wrap: wrap;
       gap: 12px;
+    }
+
+    .wizard-toolbar {
+      display: grid;
+      gap: 10px;
+      margin-bottom: 16px;
+    }
+
+    .wizard-caption,
+    .wizard-note {
+      margin: 0;
+      max-width: 780px;
+    }
+
+    .wizard-status {
+      min-height: 1.4em;
+      font-size: 14px;
+    }
+
+    .field-help {
+      font-size: 12px;
+      line-height: 1.45;
+      color: var(--muted);
+    }
+
+    .hidden {
+      display: none !important;
+    }
+
+    .wizard-dialog {
+      width: min(860px, calc(100vw - 28px));
+      max-width: 860px;
+      border: none;
+      padding: 0;
+      background: transparent;
+    }
+
+    .wizard-dialog::backdrop {
+      background: rgba(26, 23, 20, 0.48);
+      backdrop-filter: blur(6px);
+    }
+
+    .wizard-form {
+      display: grid;
+      gap: 16px;
+      background: var(--card);
+      border: 1px solid var(--line);
+      border-radius: 24px;
+      box-shadow: var(--shadow);
+      padding: 22px;
+    }
+
+    .wizard-head {
+      display: flex;
+      align-items: flex-start;
+      justify-content: space-between;
+      gap: 18px;
+    }
+
+    .wizard-copy p {
+      margin: 8px 0 0;
+    }
+
+    .wizard-grid {
+      display: grid;
+      gap: 12px;
+      grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+    }
+
+    .wizard-options {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 14px;
+    }
+
+    .toggle,
+    .checkbox {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      font-size: 14px;
+      color: var(--ink);
+    }
+
+    .toggle input,
+    .checkbox input {
+      width: auto;
+      margin: 0;
+      padding: 0;
+    }
+
+    .wizard-preview pre {
+      min-height: 220px;
+      max-height: 320px;
     }
 
     pre {
@@ -1060,6 +1433,10 @@ function renderShell({ title, subtitle = "", body, notice = "", error = "" }) {
         padding: 18px;
         border-radius: 20px;
       }
+
+      .wizard-head {
+        flex-direction: column;
+      }
     }
   </style>
 </head>
@@ -1105,6 +1482,411 @@ function renderShell({ title, subtitle = "", body, notice = "", error = "" }) {
           .join("\\n");
 
         node.textContent = next;
+      }
+
+      const modelsTextarea = document.querySelector('textarea[name="models_json"]');
+      const wizardDialog = document.querySelector("[data-model-wizard]");
+      const wizardOpen = document.querySelector("[data-model-wizard-open]");
+      const wizardClose = document.querySelector("[data-model-wizard-close]");
+      const wizardReset = document.querySelector("[data-model-wizard-reset]");
+      const wizardForm = document.querySelector("[data-model-wizard-form]");
+      const wizardStatus = document.querySelector("[data-model-wizard-status]");
+      const templatesNode = document.getElementById("model-wizard-templates");
+
+      if (modelsTextarea && wizardDialog && wizardOpen && wizardForm && templatesNode) {
+        const templates = JSON.parse(templatesNode.textContent);
+        const templateMap = new Map(templates.map((template) => [template.id, template]));
+        const fields = {
+          template: wizardForm.querySelector("[data-model-wizard-template]"),
+          templateHelp: wizardForm.querySelector("[data-model-wizard-template-help]"),
+          mode: wizardForm.querySelector("[data-model-wizard-mode]"),
+          provider: wizardForm.querySelector("[data-model-wizard-provider]"),
+          providerHelp: wizardForm.querySelector("[data-model-wizard-provider-help]"),
+          baseUrlWrap: wizardForm.querySelector("[data-model-wizard-base-url-wrap]"),
+          baseUrl: wizardForm.querySelector("[data-model-wizard-base-url]"),
+          baseUrlHelp: wizardForm.querySelector("[data-model-wizard-base-url-help]"),
+          apiWrap: wizardForm.querySelector("[data-model-wizard-api-wrap]"),
+          api: wizardForm.querySelector("[data-model-wizard-api]"),
+          apiHelp: wizardForm.querySelector("[data-model-wizard-api-help]"),
+          apiKey: wizardForm.querySelector("[data-model-wizard-api-key]"),
+          modelToggleWrap: wizardForm.querySelector("[data-model-wizard-model-toggle-wrap]"),
+          includeModel: wizardForm.querySelector("[data-model-wizard-include-model]"),
+          modelFields: wizardForm.querySelector("[data-model-wizard-model-fields]"),
+          modelOptions: wizardForm.querySelector("[data-model-wizard-model-options]"),
+          modelId: wizardForm.querySelector("[data-model-wizard-model-id]"),
+          modelName: wizardForm.querySelector("[data-model-wizard-model-name]"),
+          contextWindow: wizardForm.querySelector("[data-model-wizard-context-window]"),
+          maxTokens: wizardForm.querySelector("[data-model-wizard-max-tokens]"),
+          reasoning: wizardForm.querySelector("[data-model-wizard-reasoning]"),
+          image: wizardForm.querySelector("[data-model-wizard-image]"),
+          modelNote: wizardForm.querySelector("[data-model-wizard-model-note]"),
+          error: wizardForm.querySelector("[data-model-wizard-error]"),
+          preview: wizardForm.querySelector("[data-model-wizard-preview]"),
+        };
+
+        const normalizeModels = (raw) => {
+          if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
+            return {
+              mode: "merge",
+              providers: {},
+            };
+          }
+
+          return {
+            ...raw,
+            mode: typeof raw.mode === "string" && raw.mode.trim() ? raw.mode.trim() : "merge",
+            providers:
+              raw.providers && typeof raw.providers === "object" && !Array.isArray(raw.providers)
+                ? raw.providers
+                : {},
+          };
+        };
+
+        const parseModels = () => {
+          let parsed;
+          try {
+            parsed = JSON.parse(modelsTextarea.value || "{}");
+          } catch (error) {
+            throw new Error("Current models JSON is invalid: " + error.message);
+          }
+
+          if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+            throw new Error("Current models JSON must be an object.");
+          }
+
+          return normalizeModels(parsed);
+        };
+
+        const currentTemplate = () => templateMap.get(fields.template.value) || templates[0];
+
+        const firstModelEntry = (provider) => {
+          if (!provider || typeof provider !== "object" || Array.isArray(provider) || !Array.isArray(provider.models)) {
+            return null;
+          }
+
+          return provider.models.find((entry) => entry && typeof entry === "object" && !Array.isArray(entry)) || null;
+        };
+
+        const readExistingProvider = (models, providerId) => {
+          if (!providerId) {
+            return {};
+          }
+
+          const provider = models.providers && models.providers[providerId];
+          if (!provider || typeof provider !== "object" || Array.isArray(provider)) {
+            return {};
+          }
+
+          return provider;
+        };
+
+        const setStatus = (message, tone = "muted") => {
+          wizardStatus.textContent = message;
+          wizardStatus.classList.remove("muted", "status-ok", "status-bad");
+          wizardStatus.classList.add(tone === "error" ? "status-bad" : tone === "success" ? "status-ok" : "muted");
+        };
+
+        const clearWizardError = () => {
+          fields.error.textContent = "";
+          fields.error.classList.add("hidden");
+        };
+
+        const showWizardError = (message) => {
+          fields.error.textContent = message;
+          fields.error.classList.remove("hidden");
+        };
+
+        const parsePositiveInteger = (value, label) => {
+          const text = String(value || "").trim();
+          if (!text) {
+            return undefined;
+          }
+
+          const number = Number(text);
+          if (!Number.isInteger(number) || number <= 0) {
+            throw new Error(label + " must be a positive whole number.");
+          }
+
+          return number;
+        };
+
+        const hasModelOverrides = () =>
+          Boolean(
+            String(fields.modelId.value || "").trim() ||
+              String(fields.modelName.value || "").trim() ||
+              String(fields.contextWindow.value || "").trim() ||
+              String(fields.maxTokens.value || "").trim() ||
+              fields.reasoning.checked ||
+              fields.image.checked,
+          );
+
+        const syncFieldVisibility = () => {
+          const template = currentTemplate();
+          const showModelOptions = Boolean(template.modelRequired || fields.includeModel.checked || hasModelOverrides());
+
+          fields.provider.readOnly = !template.providerIdEditable;
+          fields.baseUrlWrap.classList.toggle("hidden", !template.showBaseUrl);
+          fields.apiWrap.classList.toggle("hidden", !template.showApi);
+          fields.modelToggleWrap.classList.toggle("hidden", Boolean(template.modelRequired));
+          fields.modelOptions.classList.toggle("hidden", !showModelOptions);
+
+          fields.provider.required = true;
+          fields.baseUrl.required = Boolean(template.showBaseUrl && template.baseUrlRequired);
+          fields.apiKey.required = Boolean(template.apiKeyRequired);
+          fields.api.disabled = !template.apiEditable;
+          fields.modelId.required = Boolean(template.modelRequired || fields.includeModel.checked || hasModelOverrides());
+
+          fields.providerHelp.textContent = template.providerIdEditable
+            ? "This becomes the prefix in provider/model references."
+            : "This template uses the standard OpenClaw provider id.";
+          fields.baseUrlHelp.textContent = template.showBaseUrl
+            ? template.id === "ollama"
+              ? "Use the native Ollama URL without /v1 so tool calling stays reliable."
+              : "Paste the upstream API base URL exactly as the provider documents it."
+            : "This template uses OpenClaw's built-in default endpoint.";
+          fields.apiHelp.textContent = template.showApi ? "This must match the upstream API compatibility mode." : "";
+          fields.modelNote.textContent = template.modelRequired
+            ? "This template needs an explicit model entry so the generated provider config is complete."
+            : hasModelOverrides()
+              ? "Because you filled model-specific fields such as context length, the wizard will write one explicit model entry."
+              : "Model-specific fields are optional, but context length is often worth setting explicitly. Filling anything below will create or update one explicit model entry.";
+        };
+
+        const populateWizard = ({ forceReset = false } = {}) => {
+          const template = currentTemplate();
+          const currentModels = parseModels();
+          const providerId =
+            !template.providerIdEditable || forceReset || !String(fields.provider.value || "").trim()
+              ? template.providerId
+              : String(fields.provider.value || "").trim();
+          const existingProvider = readExistingProvider(currentModels, providerId);
+          const modelEntry = firstModelEntry(existingProvider);
+
+          clearWizardError();
+          fields.mode.value = currentModels.mode === "replace" ? "replace" : "merge";
+          fields.templateHelp.textContent = template.description;
+          fields.provider.value = providerId;
+          fields.provider.placeholder = template.providerId;
+          fields.baseUrl.value =
+            typeof existingProvider.baseUrl === "string" ? existingProvider.baseUrl : template.baseUrlDefault;
+          fields.baseUrl.placeholder = template.baseUrlDefault || "https://example.com/v1";
+          fields.api.value =
+            typeof existingProvider.api === "string" && existingProvider.api ? existingProvider.api : template.apiDefault;
+          fields.apiKey.value =
+            typeof existingProvider.apiKey === "string" ? existingProvider.apiKey : template.apiKeyDefault;
+          fields.includeModel.checked = Boolean(template.modelRequired || modelEntry || template.includeModelDefault);
+          fields.includeModel.disabled = Boolean(template.modelRequired);
+          fields.modelId.value =
+            typeof modelEntry?.id === "string" ? modelEntry.id : template.modelRequired ? template.modelIdDefault : "";
+          fields.modelId.placeholder = template.modelIdDefault || "your-model-id";
+          fields.modelName.value =
+            typeof modelEntry?.name === "string" ? modelEntry.name : template.modelRequired ? template.modelNameDefault : "";
+          fields.modelName.placeholder = template.modelNameDefault || "Display name";
+          fields.contextWindow.value =
+            Number.isInteger(modelEntry?.contextWindow) && modelEntry.contextWindow > 0 ? String(modelEntry.contextWindow) : "";
+          fields.maxTokens.value =
+            Number.isInteger(modelEntry?.maxTokens) && modelEntry.maxTokens > 0 ? String(modelEntry.maxTokens) : "";
+          fields.reasoning.checked = Boolean(modelEntry?.reasoning);
+          fields.image.checked = Array.isArray(modelEntry?.input) && modelEntry.input.includes("image");
+
+          syncFieldVisibility();
+        };
+
+        const buildNextModels = () => {
+          const template = currentTemplate();
+          const currentModels = parseModels();
+          const providerId = String(fields.provider.value || "").trim();
+          if (!providerId) {
+            throw new Error("Provider ID is required.");
+          }
+
+          const existingProvider = readExistingProvider(currentModels, providerId);
+          const provider = { ...existingProvider };
+          const apiKey = String(fields.apiKey.value || "").trim();
+          const baseUrl = String(fields.baseUrl.value || "").trim();
+          const api = String(fields.api.value || "").trim();
+          const includeModel = Boolean(template.modelRequired || fields.includeModel.checked || hasModelOverrides());
+
+          if (template.apiKeyRequired && !apiKey) {
+            throw new Error("API key is required for this template.");
+          }
+
+          if (template.showBaseUrl && template.baseUrlRequired && !baseUrl) {
+            throw new Error("Base URL is required for this template.");
+          }
+
+          if (apiKey) {
+            provider.apiKey = apiKey;
+          } else {
+            delete provider.apiKey;
+          }
+
+          if (template.showBaseUrl) {
+            if (baseUrl) {
+              provider.baseUrl = baseUrl;
+            } else {
+              delete provider.baseUrl;
+            }
+          }
+
+          if (template.showApi) {
+            if (api) {
+              provider.api = api;
+            } else {
+              delete provider.api;
+            }
+          }
+
+          if (includeModel) {
+            const modelId = String(fields.modelId.value || "").trim();
+            if (!modelId) {
+              throw new Error("Model ID is required when an explicit model entry is enabled.");
+            }
+
+            const nextModel = {
+              id: modelId,
+            };
+            const modelName = String(fields.modelName.value || "").trim();
+            if (modelName) {
+              nextModel.name = modelName;
+            }
+
+            const contextWindow = parsePositiveInteger(fields.contextWindow.value, "Context length");
+            if (contextWindow !== undefined) {
+              nextModel.contextWindow = contextWindow;
+            }
+
+            const maxTokens = parsePositiveInteger(fields.maxTokens.value, "Max output tokens");
+            if (maxTokens !== undefined) {
+              nextModel.maxTokens = maxTokens;
+            }
+
+            if (fields.reasoning.checked) {
+              nextModel.reasoning = true;
+            }
+
+            if (fields.image.checked) {
+              nextModel.input = ["text", "image"];
+            }
+
+            provider.models = [nextModel];
+          } else {
+            delete provider.models;
+          }
+
+          return {
+            ...currentModels,
+            mode: fields.mode.value === "replace" ? "replace" : "merge",
+            providers: {
+              ...currentModels.providers,
+              [providerId]: provider,
+            },
+          };
+        };
+
+        const updatePreview = () => {
+          try {
+            clearWizardError();
+            const nextModels = buildNextModels();
+            fields.preview.textContent = JSON.stringify(nextModels, null, 2);
+          } catch (error) {
+            fields.preview.textContent = "Choose a template to generate JSON.";
+            showWizardError(error instanceof Error ? error.message : String(error));
+          }
+        };
+
+        const openWizard = () => {
+          try {
+            populateWizard({ forceReset: true });
+            updatePreview();
+            clearWizardError();
+            setStatus("", "muted");
+            if (typeof wizardDialog.showModal === "function" && !wizardDialog.open) {
+              wizardDialog.showModal();
+            } else {
+              wizardDialog.setAttribute("open", "");
+            }
+          } catch (error) {
+            setStatus(error instanceof Error ? error.message : String(error), "error");
+            modelsTextarea.focus();
+          }
+        };
+
+        const closeWizard = () => {
+          if (typeof wizardDialog.close === "function") {
+            wizardDialog.close();
+          } else {
+            wizardDialog.removeAttribute("open");
+          }
+        };
+
+        wizardOpen.addEventListener("click", openWizard);
+        if (wizardClose) {
+          wizardClose.addEventListener("click", () => {
+            closeWizard();
+          });
+        }
+        if (wizardReset) {
+          wizardReset.addEventListener("click", () => {
+            try {
+              populateWizard({ forceReset: true });
+              updatePreview();
+            } catch (error) {
+              showWizardError(error instanceof Error ? error.message : String(error));
+            }
+          });
+        }
+
+        fields.template.addEventListener("change", () => {
+          try {
+            populateWizard({ forceReset: true });
+            updatePreview();
+          } catch (error) {
+            showWizardError(error instanceof Error ? error.message : String(error));
+          }
+        });
+
+        fields.includeModel.addEventListener("change", () => {
+          syncFieldVisibility();
+          updatePreview();
+        });
+
+        const refreshWizard = () => {
+          syncFieldVisibility();
+          updatePreview();
+        };
+
+        fields.provider.addEventListener("input", refreshWizard);
+        fields.mode.addEventListener("change", refreshWizard);
+        for (const node of [
+          fields.baseUrl,
+          fields.api,
+          fields.apiKey,
+          fields.modelId,
+          fields.modelName,
+          fields.contextWindow,
+          fields.maxTokens,
+          fields.reasoning,
+          fields.image,
+        ]) {
+          node.addEventListener("input", refreshWizard);
+          node.addEventListener("change", refreshWizard);
+        }
+
+        wizardForm.addEventListener("submit", (event) => {
+          event.preventDefault();
+
+          try {
+            const nextModels = buildNextModels();
+            const providerId = String(fields.provider.value || "").trim();
+            modelsTextarea.value = JSON.stringify(nextModels, null, 2);
+            closeWizard();
+            setStatus('Updated provider "' + providerId + '" in the JSON editor. Review it below, then save and restart.', "success");
+            modelsTextarea.focus();
+          } catch (error) {
+            showWizardError(error instanceof Error ? error.message : String(error));
+          }
+        });
       }
     })();
   </script>
@@ -1261,6 +2043,7 @@ async function renderDashboardPage(url) {
             Edit the top-level <code>models</code> section only. The manager preserves and re-applies its
             own gateway fields on every save so the reverse proxy and trusted-proxy auth remain intact.
           </p>
+          ${renderModelWizard()}
           <form method="post" action="/actions/models">
             <label>
               models JSON
